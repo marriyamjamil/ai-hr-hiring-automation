@@ -1,0 +1,9 @@
+# Secrets - never upload
+.env
+
+# Database
+*.db
+
+# Python temporary files
+__pycache__/
+*.pyc

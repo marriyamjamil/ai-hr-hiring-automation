@@ -1,0 +1,64 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models import Job
+from app.schemas import JobCreate, JobOut, JobUpdate
+
+# All endpoints in this file start with /api/jobs and appear under "Jobs" on /docs
+router = APIRouter(prefix="/api/jobs", tags=["Jobs"])
+
+
+def get_job_or_404(job_id: int, db: Session) -> Job:
+    """Find a job by id, or send a 404 error if it doesn't exist."""
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return job
+
+
+# ➕ Save a new job
+@router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
+def create_job(job_in: JobCreate, db: Session = Depends(get_db)):
+    """Create a new job."""
+    job = Job(**job_in.model_dump())
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+# 👀 Show all jobs
+@router.get("", response_model=list[JobOut])
+def list_jobs(db: Session = Depends(get_db)):
+    """List all jobs, newest first."""
+    return db.scalars(select(Job).order_by(Job.id.desc())).all()
+
+
+# 👀 Show one job
+@router.get("/{job_id}", response_model=JobOut)
+def get_job(job_id: int, db: Session = Depends(get_db)):
+    """Get one job by its id."""
+    return get_job_or_404(job_id, db)
+
+
+# ✏️ Change a job
+@router.patch("/{job_id}", response_model=JobOut)
+def update_job(job_id: int, job_in: JobUpdate, db: Session = Depends(get_db)):
+    """Update only the fields that were sent."""
+    job = get_job_or_404(job_id, db)
+    for field, value in job_in.model_dump(exclude_unset=True).items():
+        setattr(job, field, value)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+# 🗑️ Delete a job
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_job(job_id: int, db: Session = Depends(get_db)):
+    """Delete a job."""
+    job = get_job_or_404(job_id, db)
+    db.delete(job)
+    db.commit()
