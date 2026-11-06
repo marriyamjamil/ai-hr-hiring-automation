@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     azure_openai_api_key: str = ""
     azure_openai_deployment: str = "gpt-4o"
 
+    # Resume uploads
+    upload_dir: str = "uploads"
+    max_upload_mb: int = 5
+
 
 # One shared settings object for the whole app
 settings = Settings()

@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from app import models  # noqa: F401  (importing this registers the tables)
 from app.config import settings
 from app.database import Base, engine
-from app.routers import jobs
+from app.routers import candidates, jobs
 
 # Create all tables in the database if they don't exist yet
 Base.metadata.create_all(bind=engine)
@@ -16,6 +16,7 @@ app = FastAPI(
 
 # Connect the routers (groups of endpoints)
 app.include_router(jobs.router)
+app.include_router(candidates.router)
 
 
 @app.get("/", tags=["System"])

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Optional
 
 from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -55,7 +56,29 @@ class Candidate(Base):
     phone: Mapped[str | None] = mapped_column(String(30))
     resume_file: Mapped[str | None] = mapped_column(String(500))
     resume_text: Mapped[str | None] = mapped_column(Text)
+    # resume_received / needs_manual_review / scored / ...
     status: Mapped[str] = mapped_column(String(40), default="resume_received")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     job: Mapped["Job"] = relationship(back_populates="candidates")
+    evaluation: Mapped[Optional["ResumeEvaluation"]] = relationship(back_populates="candidate")
+
+
+class ResumeEvaluation(Base):
+    """Agent 1's score for one candidate's resume against one job."""
+
+    __tablename__ = "resume_evaluations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"), unique=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    overall_score: Mapped[int]
+    criterion_scores: Mapped[dict] = mapped_column(JSON, default=dict)
+    evidence: Mapped[list] = mapped_column(JSON, default=list)
+    missing_or_unclear: Mapped[list] = mapped_column(JSON, default=list)
+    warnings: Mapped[list] = mapped_column(JSON, default=list)
+    summary: Mapped[str | None] = mapped_column(Text)
+    model_version: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    candidate: Mapped["Candidate"] = relationship(back_populates="evaluation")

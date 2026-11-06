@@ -7,3 +7,5 @@
 # Python temporary files
 __pycache__/
 *.pyc
+# Uploaded CVs (personal data - never upload)
+uploads/

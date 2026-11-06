@@ -1,6 +1,9 @@
 fastapi
 uvicorn[standard]
+python-multipart
 sqlalchemy
 pydantic-settings
 python-dotenv
 openai
+pymupdf
+python-docx
