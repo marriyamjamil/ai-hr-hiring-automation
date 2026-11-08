@@ -86,6 +86,18 @@ export type ShortlistResult = {
   skipped: string[];
 };
 
+// One row on the "all candidates" page
+export type CandidateListItem = {
+  id: number;
+  name: string;
+  email: string | null;
+  status: string;
+  overall_score: number | null;
+  job_id: number;
+  job_title: string;
+  created_at: string;
+};
+
 // What HR fills in for Agent 0 (the AI job description writer)
 export type JDGenerateRequest = {
   title: string;
@@ -249,6 +261,7 @@ export const deleteJob = (jobId: number) => apiFetch<void>(`/api/jobs/${jobId}`,
 export const getJobCandidates = (jobId: number) =>
   apiFetch<CandidateSummary[]>(`/api/jobs/${jobId}/candidates`);
 export const getCandidate = (candidateId: number) => apiFetch<CandidateDetail>(`/api/candidates/${candidateId}`);
+export const getAllCandidates = () => apiFetch<CandidateListItem[]>("/api/candidates");
 
 // HR decisions (the human approval gate)
 export const getShortlistSuggestion = (jobId: number, top: number, minScore: number) =>

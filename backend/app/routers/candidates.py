@@ -12,6 +12,7 @@ from app.dependencies import get_current_user
 from app.models import Candidate, CandidateDecision, Job, ResumeEvaluation, User
 from app.schemas import (
     CandidateDetail,
+    CandidateListItem,
     CandidateSummary,
     DecisionIn,
     ShortlistIn,
@@ -185,6 +186,32 @@ def to_summary(c: Candidate) -> CandidateSummary:
         overall_score=c.evaluation.overall_score if c.evaluation else None,
         summary=c.evaluation.summary if c.evaluation else None,
     )
+
+
+# 👥 Every candidate from every job (for the "Candidates" page in the sidebar)
+@router.get("/api/candidates", response_model=list[CandidateListItem])
+def list_all_candidates(db: Session = Depends(get_db)):
+    """All candidates, newest first, with the title of the job they applied for.
+    The website searches, filters and sorts this list itself."""
+    rows = db.execute(
+        select(Candidate, Job.title)  # each row = (candidate, job title)
+        .join(Job, Candidate.job_id == Job.id)  # match candidate.job_id to jobs.id
+        .order_by(Candidate.created_at.desc())  # newest first
+    ).all()
+
+    return [
+        CandidateListItem(
+            id=candidate.id,
+            name=candidate.name,
+            email=candidate.email,
+            status=candidate.status,
+            overall_score=candidate.evaluation.overall_score if candidate.evaluation else None,
+            job_id=candidate.job_id,
+            job_title=job_title,
+            created_at=candidate.created_at,
+        )
+        for candidate, job_title in rows
+    ]
 
 
 # 👤 Full details of one candidate

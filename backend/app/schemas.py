@@ -151,6 +151,18 @@ class CandidateSummary(BaseModel):
     summary: str | None
 
 
+# One row on the "all candidates" page (includes which job they applied for)
+class CandidateListItem(BaseModel):
+    id: int
+    name: str
+    email: str | None
+    status: str
+    overall_score: int | None
+    job_id: int
+    job_title: str
+    created_at: datetime
+
+
 # ---------- HR decisions (shortlist / reject), the human approval gate ----------
 
 # One row of a candidate's decision history
