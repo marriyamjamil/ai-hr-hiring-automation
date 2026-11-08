@@ -56,12 +56,16 @@ class Candidate(Base):
     phone: Mapped[str | None] = mapped_column(String(30))
     resume_file: Mapped[str | None] = mapped_column(String(500))
     resume_text: Mapped[str | None] = mapped_column(Text)
-    # resume_received / needs_manual_review / scored / ...
+    # resume_received / needs_manual_review / scored / shortlisted / rejected / ...
     status: Mapped[str] = mapped_column(String(40), default="resume_received")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     job: Mapped["Job"] = relationship(back_populates="candidates")
     evaluation: Mapped[Optional["ResumeEvaluation"]] = relationship(back_populates="candidate")
+    # Every HR decision about this candidate, oldest first (the audit trail)
+    decisions: Mapped[list["CandidateDecision"]] = relationship(
+        back_populates="candidate", order_by="CandidateDecision.id"
+    )
 
 
 class ResumeEvaluation(Base):
@@ -82,3 +86,30 @@ class ResumeEvaluation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     candidate: Mapped["Candidate"] = relationship(back_populates="evaluation")
+
+
+class CandidateDecision(Base):
+    """One HR decision about a candidate (shortlist, reject or undo).
+
+    Rows are only ever added, never changed or deleted, so this table is the
+    audit trail: who decided what, why, and when.
+    """
+
+    __tablename__ = "candidate_decisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"))
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    from_status: Mapped[str] = mapped_column(String(40))  # e.g. "scored"
+    to_status: Mapped[str] = mapped_column(String(40))  # e.g. "shortlisted"
+    reason: Mapped[str | None] = mapped_column(Text)
+    decided_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    candidate: Mapped["Candidate"] = relationship(back_populates="decisions")
+    decided_by_user: Mapped[Optional["User"]] = relationship()
+
+    @property
+    def decided_by_name(self) -> str | None:
+        """The name of the person who made the decision (shown in the history)."""
+        return self.decided_by_user.name if self.decided_by_user else None

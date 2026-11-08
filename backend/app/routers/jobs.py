@@ -4,11 +4,13 @@ from sqlalchemy.orm import Session
 from app.agents.jd_generator import _valid_rubric, generate_jd
 from app.config import settings
 from app.database import get_db
-from app.models import Job
+from app.dependencies import get_current_user
+from app.models import Job, User
 from app.schemas import JDGenerateRequest, JDGenerateResponse, JobCreate, JobOut, JobUpdate
 
-# All endpoints in this file start with /api/jobs and appear under "Jobs" on /docs
-router = APIRouter(prefix="/api/jobs", tags=["Jobs"])
+# All endpoints in this file start with /api/jobs and appear under "Jobs" on /docs.
+# Every endpoint here needs a logged-in user (no pass → error 401).
+router = APIRouter(prefix="/api/jobs", tags=["Jobs"], dependencies=[Depends(get_current_user)])
 
 
 def get_job_or_404(job_id: int, db: Session) -> Job:
@@ -39,9 +41,13 @@ def generate_job_description(request: JDGenerateRequest):
 
 # ➕ Save a new job
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED)
-def create_job(job_in: JobCreate, db: Session = Depends(get_db)):
+def create_job(
+    job_in: JobCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Create a new job (as a draft)."""
-    job = Job(**job_in.model_dump())
+    job = Job(**job_in.model_dump(), created_by=current_user.id)  # remember who created it
     db.add(job)
     db.commit()
     db.refresh(job)
@@ -76,7 +82,11 @@ def update_job(job_id: int, job_in: JobUpdate, db: Session = Depends(get_db)):
 
 # ✅ HR approves the job description
 @router.post("/{job_id}/approve", response_model=JobOut)
-def approve_job(job_id: int, db: Session = Depends(get_db)):
+def approve_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """HR confirms the job description is final. Only approved jobs can receive resumes later."""
     job = get_job_or_404(job_id, db)
     if not job.jd_text or len(job.jd_text.strip()) < 100:
@@ -91,6 +101,7 @@ def approve_job(job_id: int, db: Session = Depends(get_db)):
         )
     
     job.status = "approved"
+    job.approved_by = current_user.id  # remember who approved it (SRS: audit who approved)
     db.commit()
     db.refresh(job)
     return job

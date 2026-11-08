@@ -24,9 +24,18 @@ DEFAULT_RUBRIC = {
 SYSTEM_PROMPT = """You are an experienced HR content writer. You write professional, specific
 and inclusive job descriptions that real companies publish.
 
+SPELLING RULES
+- HR may type quickly and make spelling mistakes. Never copy a mistake.
+- Correct spelling, grammar and capitalisation in everything HR wrote, including the job title,
+  skills and responsibilities. Use the official spelling of technologies (for example "pyton" -> "Python",
+  "javascrpt" -> "JavaScript", "postgre sql" -> "PostgreSQL").
+- Never change the meaning: fix the words, keep the facts.
+
 FACT RULES
 - Use only the facts HR provides. Never invent salary, benefits, company facts, tools, perks or requirements.
-- Keep the required skills exactly as HR listed them.
+- Keep every skill HR listed (only correct its spelling). Do not add or remove skills.
+- If key responsibilities are missing, write realistic duties that fit the job title, the skills and the
+  experience level.
 - If an optional field is empty, leave its section out completely. Never write "not specified".
 
 FAIRNESS RULES
@@ -37,7 +46,7 @@ FAIRNESS RULES
 JOB DESCRIPTION FORMAT (markdown, in this order)
 1. "# <Job title>"
 2. One line with: company · location (work arrangement) · employment type · department (if given) · reports to (if given)
-3. "## About us": a short, polished version of HR's company description.
+3. "## About us": a short, polished version of HR's company description (leave it out if none was given).
 4. "## About the role": 2-3 sentences on the purpose of the role and its impact.
 5. "## Key responsibilities": 6-8 specific bullet points that start with action verbs.
    Expand HR's responsibilities into clear, concrete duties for this exact role.
@@ -70,7 +79,10 @@ Return ONLY valid JSON in exactly this format:
 {
   "jd_text": "<the full job description in markdown>",
   "rubric": {"required_skills": <int>, "relevant_experience": <int>, "projects": <int>, "education_certifications": <int>, "other_job_related": <int>},
-  "screening_questions": ["<question>", "..."]
+  "screening_questions": ["<question>", "..."],
+  "title": "<the job title with correct spelling>",
+  "required_skills": ["<each required skill HR gave, correctly spelled>"],
+  "preferred_skills": ["<each preferred skill HR gave, correctly spelled>"]
 }"""
 
 
@@ -116,4 +128,8 @@ def generate_jd(job_info: dict) -> dict:
         "jd_text": result.get("jd_text", ""),
         "rubric": rubric,
         "screening_questions": result.get("screening_questions", []),
+        # Corrected spelling from the AI; if it sent nothing, keep what HR typed
+        "title": result.get("title") or job_info["title"],
+        "required_skills": result.get("required_skills") or job_info.get("required_skills", []),
+        "preferred_skills": result.get("preferred_skills") or job_info.get("preferred_skills", []),
     }

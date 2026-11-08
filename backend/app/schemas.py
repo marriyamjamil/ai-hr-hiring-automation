@@ -48,13 +48,13 @@ class JDGenerateRequest(BaseModel):
     # Required: HR must fill these in
     title: str = Field(min_length=2, max_length=200)
     company_name: str = Field(min_length=2, max_length=200)
-    about_company: str = Field(min_length=20, max_length=1500)
+    about_company: str | None = Field(default=None, max_length=1500)  # optional
     employment_type: EmploymentType
     location: str = Field(min_length=2, max_length=100)
     work_arrangement: WorkArrangement
     experience: str = Field(min_length=1, max_length=50)
     required_skills: list[str] = Field(min_length=1)
-    key_responsibilities: list[str] = Field(min_length=1)
+    key_responsibilities: list[str] = Field(default_factory=list)  # optional: AI writes them if empty
 
     # Optional: only used if HR fills them in
     department: str | None = None
@@ -74,6 +74,10 @@ class JDGenerateResponse(BaseModel):
     jd_text: str
     rubric: dict[str, int]
     screening_questions: list[str]
+    # HR's own values with spelling corrected, so the job is saved correctly
+    title: str
+    required_skills: list[str]
+    preferred_skills: list[str]
 
 
 # What HR sends when creating a job
@@ -147,6 +151,39 @@ class CandidateSummary(BaseModel):
     summary: str | None
 
 
+# ---------- HR decisions (shortlist / reject), the human approval gate ----------
+
+# One row of a candidate's decision history
+class DecisionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    from_status: str
+    to_status: str
+    reason: str | None
+    decided_by_name: str | None
+    created_at: datetime
+
+
+# What HR sends to decide about ONE candidate
+class DecisionIn(BaseModel):
+    decision: Literal["shortlisted", "rejected", "undo"] = Field(examples=["rejected"])
+    reason: str | None = Field(default=None, max_length=500, examples=["Less than 1 year of Python experience"])
+
+
+# What HR sends to approve the suggested shortlist (many candidates in one click)
+class ShortlistIn(BaseModel):
+    candidate_ids: list[int] = Field(min_length=1, examples=[[1, 2, 3]])
+    note: str | None = Field(default=None, max_length=500)
+
+
+# The reply after approving a shortlist
+class ShortlistResult(BaseModel):
+    job_id: int
+    shortlisted: int  # how many were shortlisted
+    skipped: list[str]  # why some were not (e.g. "Ali: already rejected")
+
+
 # Full details of one candidate
 class CandidateDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -159,6 +196,7 @@ class CandidateDetail(BaseModel):
     status: str
     created_at: datetime
     evaluation: EvaluationOut | None
+    decisions: list[DecisionOut] = []  # HR's decision history, oldest first
 
 
 # What happened to each uploaded file
@@ -175,3 +213,33 @@ class UploadSummary(BaseModel):
     job_id: int
     total_files: int
     results: list[UploadResult]
+
+
+# ---------- Users and login ----------
+
+UserRole = Literal["admin", "hr", "manager"]
+
+
+# What the login endpoint sends back
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+# A user as the API shows it (never includes the password)
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    email: str
+    role: str
+    created_at: datetime
+
+
+# What an admin sends to create a new account
+class UserCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=100, examples=["Sara Khan"])
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255, examples=["sara@abctech.example"])
+    password: str = Field(min_length=8, max_length=72)
+    role: UserRole = "hr"
