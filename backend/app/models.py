@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -66,6 +66,14 @@ class Candidate(Base):
     decisions: Mapped[list["CandidateDecision"]] = relationship(
         back_populates="candidate", order_by="CandidateDecision.id"
     )
+    # Every CV file uploaded for this candidate (the current one + replaced ones)
+    versions: Mapped[list["ResumeVersion"]] = relationship(
+        back_populates="candidate", order_by="ResumeVersion.id"
+    )
+    # Every screening call with this candidate (Agent 2), oldest first
+    screening_calls: Mapped[list["ScreeningCall"]] = relationship(
+        back_populates="candidate", order_by="ScreeningCall.id"
+    )
 
 
 class ResumeEvaluation(Base):
@@ -113,3 +121,58 @@ class CandidateDecision(Base):
     def decided_by_name(self) -> str | None:
         """The name of the person who made the decision (shown in the history)."""
         return self.decided_by_user.name if self.decided_by_user else None
+
+
+class ResumeVersion(Base):
+    """One CV file uploaded for a candidate.
+
+    When a candidate sends an updated CV, the old version is kept here
+    (is_current = False) instead of being deleted, for the audit trail.
+    """
+
+    __tablename__ = "resume_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"))
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    file_hash: Mapped[str] = mapped_column(String(64), index=True)  # SHA-256 "fingerprint" of the file
+    file_name: Mapped[str] = mapped_column(String(255))  # the name HR uploaded (for display only)
+    resume_file: Mapped[str | None] = mapped_column(String(500))  # where it is saved on disk
+    overall_score: Mapped[int | None]  # the score this version got (None = not scored)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    candidate: Mapped["Candidate"] = relationship(back_populates="versions")
+
+
+class ScreeningCall(Base):
+    """One screening call between Agent 2 and a candidate.
+
+    mode "text" = a pretend call typed in the browser (Stage 2.1).
+    mode "voice" = a real voice call through Vapi (Stage 2.2, later).
+    """
+
+    __tablename__ = "screening_calls"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"))
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    mode: Mapped[str] = mapped_column(String(10), default="text")  # text / voice
+    status: Mapped[str] = mapped_column(String(20), default="in_progress")  # in_progress / completed / cancelled
+    consent_given: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # The whole conversation, in order: [{"role": "agent" or "candidate", "text": "..."}]
+    transcript: Mapped[list] = mapped_column(JSON, default=list)
+    # Which screening question we are on (0 = the first one)
+    question_index: Mapped[int] = mapped_column(default=0)
+
+    # Filled in by GPT when the call ends
+    report: Mapped[dict | None] = mapped_column(JSON)  # summary, answers, red flags, recommendation
+    overall_score: Mapped[int | None]  # 0-100
+    model_version: Mapped[str | None] = mapped_column(String(100))
+
+    started_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))  # the HR user who started it
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    candidate: Mapped["Candidate"] = relationship(back_populates="screening_calls")

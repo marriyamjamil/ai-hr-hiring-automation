@@ -98,6 +98,46 @@ export type CandidateListItem = {
   created_at: string;
 };
 
+// ---------- Screening calls (Agent 2) ----------
+
+export type ScreeningMessage = {
+  role: "agent" | "candidate";
+  text: string;
+};
+
+// The AI's marks for one screening question
+export type ScreeningAnswer = {
+  question: string;
+  answer_summary: string;
+  score: number; // 0-10
+  comment: string;
+};
+
+// The report GPT writes after the call
+export type ScreeningReport = {
+  answers: ScreeningAnswer[];
+  strengths: string[];
+  concerns: string[];
+  summary: string;
+  recommendation: "proceed" | "maybe" | "not_recommended";
+};
+
+export type ScreeningCall = {
+  id: number;
+  candidate_id: number;
+  job_id: number;
+  mode: string; // text / voice
+  status: string; // in_progress / completed / cancelled
+  consent_given: boolean;
+  transcript: ScreeningMessage[];
+  question_index: number;
+  report: ScreeningReport | null; // null until the call is completed
+  overall_score: number | null;
+  model_version: string | null;
+  started_at: string;
+  ended_at: string | null;
+};
+
 // What HR fills in for Agent 0 (the AI job description writer)
 export type JDGenerateRequest = {
   title: string;
@@ -147,7 +187,7 @@ export type JobCreate = {
 // What happened to each uploaded CV
 export type UploadResult = {
   file_name: string;
-  status: "scored" | "needs_manual_review" | "rejected" | string;
+  status: "scored" | "updated" | "duplicate" | "blocked" | "needs_manual_review" | "rejected" | string;
   candidate_id: number | null;
   overall_score: number | null;
   detail: string | null;
@@ -277,3 +317,15 @@ export function uploadResumes(jobId: number, files: File[]) {
   files.forEach((file) => form.append("files", file));
   return apiFetch<UploadSummary>(`/api/jobs/${jobId}/resumes`, { method: "POST", body: form });
 }
+
+// Screening calls (Agent 2)
+export const getScreeningCalls = (candidateId: number) =>
+  apiFetch<ScreeningCall[]>(`/api/candidates/${candidateId}/screening-calls`);
+export const startScreeningCall = (candidateId: number) =>
+  apiFetch<ScreeningCall>(`/api/candidates/${candidateId}/screening-calls`, { method: "POST" });
+export const replyToScreeningCall = (callId: number, text: string) =>
+  apiFetch<ScreeningCall>(`/api/screening-calls/${callId}/reply`, jsonBody("POST", { text }));
+export const cancelScreeningCall = (callId: number) =>
+  apiFetch<ScreeningCall>(`/api/screening-calls/${callId}/cancel`, { method: "POST" });
+export const retryScreeningReport = (callId: number) =>
+  apiFetch<ScreeningCall>(`/api/screening-calls/${callId}/report`, { method: "POST" });

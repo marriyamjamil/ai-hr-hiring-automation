@@ -214,7 +214,7 @@ class CandidateDetail(BaseModel):
 # What happened to each uploaded file
 class UploadResult(BaseModel):
     file_name: str
-    status: str  # scored / needs_manual_review / rejected
+    status: str  # scored / updated / duplicate / blocked / needs_manual_review / rejected
     candidate_id: int | None = None
     overall_score: int | None = None
     detail: str | None = None
@@ -255,3 +255,35 @@ class UserCreate(BaseModel):
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255, examples=["sara@abctech.example"])
     password: str = Field(min_length=8, max_length=72)
     role: UserRole = "hr"
+
+
+# ---------- Screening calls (Agent 2) ----------
+
+# One message in the call
+class ScreeningMessage(BaseModel):
+    role: Literal["agent", "candidate"]
+    text: str
+
+
+# What the candidate types as an answer
+class ScreeningReplyIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000, examples=["About 3 years, mostly Django and FastAPI."])
+
+
+# A screening call as the API shows it
+class ScreeningCallOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    candidate_id: int
+    job_id: int
+    mode: str  # text / voice
+    status: str  # in_progress / completed / cancelled
+    consent_given: bool
+    transcript: list[ScreeningMessage]
+    question_index: int
+    report: dict | None  # filled in when the call is completed
+    overall_score: int | None
+    model_version: str | None
+    started_at: datetime
+    ended_at: datetime | None

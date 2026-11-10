@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { AlertTriangle, ArrowLeft, CheckCircle2, Clock, HelpCircle, Info, Mail, Phone, Sparkles } from "lucide-react";
 
 import { DecisionPanel } from "@/components/candidates/decision-panel";
+import { ScreeningPanel } from "@/components/candidates/screening-panel";
 import { ScoreRing } from "@/components/shared/score-ring";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { getCandidate, getJob, type CandidateDetail, type Job } from "@/lib/api";
@@ -113,6 +114,12 @@ export function CandidateDetails() {
 
       {/* ---------- HR's decision (shortlist / reject / undo) + history ---------- */}
       <DecisionPanel candidate={candidate} onChange={setCandidate} />
+
+      {/* ---------- Agent 2: screening call + report ---------- */}
+      <ScreeningPanel
+        candidate={candidate}
+        onChange={() => getCandidate(candidateId).then(setCandidate).catch(() => {})}
+      />
 
       {/* ---------- Not scored: explain why ---------- */}
       {!evaluation && (

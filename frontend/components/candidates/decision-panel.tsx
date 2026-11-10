@@ -66,7 +66,13 @@ export function DecisionPanel({
         </div>
 
         {choices.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No decision is possible yet. The CV is still being processed.</p>
+          <p className="text-sm text-muted-foreground">
+            {candidate.status === "screening_in_progress"
+              ? "A screening call is in progress. You can decide after the call."
+              : candidate.status === "screened"
+                ? "The screening call is done. Read the report below."
+                : "No decision is possible yet. The CV is still being processed."}
+          </p>
         ) : (
           <>
             <textarea
@@ -127,8 +133,14 @@ export function DecisionPanel({
                 <span className="mt-1.5 size-2 shrink-0 rounded-full bg-indigo-500" />
                 <div>
                   <p>
-                    <span className="capitalize">{d.from_status.replaceAll("_", " ")}</span> →{" "}
-                    <span className="font-semibold capitalize">{d.to_status.replaceAll("_", " ")}</span>
+                    {d.from_status === d.to_status ? (
+                      <span className="font-semibold">CV updated</span> // same status: a new CV, not a decision
+                    ) : (
+                      <>
+                        <span className="capitalize">{d.from_status.replaceAll("_", " ")}</span> →{" "}
+                        <span className="font-semibold capitalize">{d.to_status.replaceAll("_", " ")}</span>
+                      </>
+                    )}
                     <span className="text-muted-foreground">
                       {" "}
                       · by {d.decided_by_name ?? "unknown"} · {formatDateTime(d.created_at)}

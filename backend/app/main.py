@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import models  # noqa: F401  (importing this registers the tables)
 from app.config import settings
 from app.database import Base, engine
-from app.routers import auth, candidates, jobs, users
+from app.routers import auth, candidates, jobs, screening, users
 
 # Create all tables in the database if they don't exist yet
 Base.metadata.create_all(bind=engine)
@@ -28,6 +28,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(jobs.router)
 app.include_router(candidates.router)
+app.include_router(screening.router)
 
 
 @app.get("/", tags=["System"])

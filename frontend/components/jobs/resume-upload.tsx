@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, FileText, Loader2, Upload, X, XCircle } from "lucide-react";
+import { AlertTriangle, Ban, CheckCircle2, Copy, FileText, Loader2, RefreshCw, Upload, X, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
 import { uploadResumes, type UploadResult } from "@/lib/api";
@@ -47,8 +47,11 @@ export function ResumeUpload({ jobId, onUploaded }: { jobId: number; onUploaded?
       const summary = await uploadResumes(jobId, files); // POST /api/jobs/{id}/resumes
       setResults(summary.results);
       setFiles([]); // empty the "chosen" list
-      const scored = summary.results.filter((r) => r.status === "scored").length;
-      toast.success(`${scored} of ${summary.total_files} CVs scored.`);
+      const count = (s: string) => summary.results.filter((r) => r.status === s).length;
+      const parts = [`${count("scored")} new`];
+      if (count("updated")) parts.push(`${count("updated")} updated`);
+      if (count("duplicate")) parts.push(`${count("duplicate")} duplicate skipped`);
+      toast.success(`${summary.total_files} CV${summary.total_files > 1 ? "s" : ""} processed: ${parts.join(", ")}.`);
       onUploaded?.(); // tell the page "new candidates exist" (used in Step 7)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed.");
@@ -156,10 +159,17 @@ export function ResumeUpload({ jobId, onUploaded }: { jobId: number; onUploaded?
                 {result.detail && <p className="text-xs text-muted-foreground">{result.detail}</p>}
               </div>
               {result.status === "scored" && <span className="font-bold text-indigo-600">{result.overall_score}/100</span>}
-              {result.status === "needs_manual_review" && (
-                <span className="text-xs font-medium text-orange-600">Needs manual review</span>
+              {result.status === "updated" && (
+                <span className="shrink-0 text-xs font-medium text-sky-600">
+                  Updated{result.overall_score !== null ? ` · ${result.overall_score}/100` : ""}
+                </span>
               )}
-              {result.status === "rejected" && <span className="text-xs font-medium text-destructive">Rejected</span>}
+              {result.status === "duplicate" && <span className="shrink-0 text-xs font-medium text-muted-foreground">Duplicate</span>}
+              {result.status === "blocked" && <span className="shrink-0 text-xs font-medium text-destructive">Not accepted</span>}
+              {result.status === "needs_manual_review" && (
+                <span className="shrink-0 text-xs font-medium text-orange-600">Needs manual review</span>
+              )}
+              {result.status === "rejected" && <span className="shrink-0 text-xs font-medium text-destructive">Rejected</span>}
             </div>
           ))}
         </div>
@@ -171,6 +181,9 @@ export function ResumeUpload({ jobId, onUploaded }: { jobId: number; onUploaded?
 // A green tick, orange warning or red cross, depending on the result
 function ResultIcon({ status }: { status: string }) {
   if (status === "scored") return <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />;
+  if (status === "updated") return <RefreshCw className="mt-0.5 size-4 shrink-0 text-sky-600" />;
+  if (status === "duplicate") return <Copy className="mt-0.5 size-4 shrink-0 text-muted-foreground" />;
+  if (status === "blocked") return <Ban className="mt-0.5 size-4 shrink-0 text-destructive" />;
   if (status === "needs_manual_review") return <AlertTriangle className="mt-0.5 size-4 shrink-0 text-orange-500" />;
   return <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />;
 }

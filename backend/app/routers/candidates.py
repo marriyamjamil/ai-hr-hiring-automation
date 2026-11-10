@@ -1,15 +1,25 @@
+import hashlib
+import re
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.agents.resume_scorer import extract_text, score_resume
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import Candidate, CandidateDecision, Job, ResumeEvaluation, User
+from app.models import (
+    Candidate,
+    CandidateDecision,
+    Job,
+    ResumeEvaluation,
+    ResumeVersion,
+    User,
+    utc_now,
+)
 from app.schemas import (
     CandidateDetail,
     CandidateListItem,
@@ -53,8 +63,79 @@ def get_job_ready_for_resumes(job_id: int, db: Session) -> Job:
     return job
 
 
-def process_resume(job: Job, file: UploadFile, db: Session) -> UploadResult:
-    """Check, save, read and score one uploaded resume."""
+# A simple pattern for an email address, e.g. "sara.khan@mail.com"
+EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def file_fingerprint(data: bytes) -> str:
+    """SHA-256 hash: the same file always gives the same 64-character code."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def find_email(text: str) -> str | None:
+    """Find the first email address in the CV text (free and instant, no AI needed)."""
+    match = EMAIL_PATTERN.search(text)
+    return match.group(0).lower() if match else None
+
+
+def backfill_versions(job: Job, db: Session) -> None:
+    """CVs uploaded before this feature have no fingerprint yet.
+    Create one from the saved file, so re-uploading them is also caught as a duplicate."""
+    for candidate in job.candidates:
+        if candidate.versions or not candidate.resume_file:
+            continue
+        path = Path(candidate.resume_file)
+        if not path.exists():
+            continue
+        db.add(ResumeVersion(
+            candidate_id=candidate.id,
+            job_id=job.id,
+            file_hash=file_fingerprint(path.read_bytes()),
+            file_name=path.name,
+            resume_file=str(path),
+            overall_score=candidate.evaluation.overall_score if candidate.evaluation else None,
+            is_current=True,
+        ))
+    db.commit()
+
+
+def apply_score(candidate: Candidate, job: Job, result: dict, db: Session) -> None:
+    """Save Agent 1's result: contact details + the evaluation (create it, or replace the old one)."""
+    contact = result["candidate"]
+    candidate.name = (contact.get("name") or candidate.name)[:100]
+    candidate.email = contact.get("email") or candidate.email
+    candidate.phone = contact.get("phone") or candidate.phone
+
+    fields = {
+        "overall_score": result["overall_score"],
+        "criterion_scores": result["criterion_scores"],
+        "evidence": result["evidence"],
+        "missing_or_unclear": result["missing_or_unclear"],
+        "warnings": result["warnings"],
+        "summary": result["summary"],
+        "model_version": result["model_version"],
+    }
+    if candidate.evaluation:  # updated CV → replace the old marks
+        for name, value in fields.items():
+            setattr(candidate.evaluation, name, value)
+        candidate.evaluation.created_at = utc_now()
+    else:
+        db.add(ResumeEvaluation(candidate_id=candidate.id, job_id=job.id, **fields))
+
+
+def score_text(job: Job, resume_text: str) -> tuple[dict | None, str | None]:
+    """Ask Agent 1 to score the text. Returns (result, None) or (None, why it failed)."""
+    if len(resume_text.strip()) < 50:
+        return None, "Could not read enough text (it may be a scanned image)."
+    try:
+        return score_resume(job.jd_text, job.rubric, resume_text), None
+    except Exception as error:
+        return None, f"AI scoring failed: {error}"
+
+
+def process_resume(job: Job, file: UploadFile, db: Session, user: User) -> UploadResult:
+    """Check, save, read and score one uploaded resume.
+    Cheap checks come first, so we never pay the AI for a duplicate."""
     file_name = Path(file.filename or "resume").name
     extension = Path(file_name).suffix.lower()
 
@@ -67,68 +148,135 @@ def process_resume(job: Job, file: UploadFile, db: Session) -> UploadResult:
         return UploadResult(file_name=file_name, status="rejected",
                             detail=f"File is larger than {settings.max_upload_mb} MB.")
 
-    # 2. Save the file with a random name (never trust the uploaded file name)
+    # 2. ⛔ Exact duplicate? (same fingerprint already uploaded for this job)
+    fingerprint = file_fingerprint(data)
+    same_file = db.scalars(
+        select(ResumeVersion).where(ResumeVersion.job_id == job.id, ResumeVersion.file_hash == fingerprint)
+    ).first()
+    if same_file:
+        return UploadResult(file_name=file_name, status="duplicate", candidate_id=same_file.candidate_id,
+                            detail="This exact file was already uploaded for this job. It was skipped (no AI cost).")
+
+    # 3. Read the text and look for an email address
+    try:
+        resume_text = extract_text(file_name, data)
+    except Exception:
+        resume_text = ""
+    email = find_email(resume_text)
+
+    # 4. 🔄 Same person already applied to this job? (matched by email, ignoring capital letters)
+    existing = None
+    if email:
+        existing = db.scalars(
+            select(Candidate)
+            .where(Candidate.job_id == job.id, func.lower(Candidate.email) == email)
+            .order_by(Candidate.id)
+        ).first()
+
+    if existing and existing.status == "rejected":
+        return UploadResult(file_name=file_name, status="blocked", candidate_id=existing.id,
+                            detail=f"{existing.name} was rejected for this job. "
+                                   "Undo the rejection first if you want to accept a new CV.")
+
+    # 5. Save the file with a random name (never trust the uploaded file name)
     job_folder = Path(settings.upload_dir) / f"job_{job.id}"
     job_folder.mkdir(parents=True, exist_ok=True)
     saved_path = job_folder / f"{uuid4().hex}{extension}"
     saved_path.write_bytes(data)
 
+    if existing:
+        return update_candidate_cv(existing, job, file_name, saved_path, fingerprint, resume_text, db, user)
+
+    # 6. ✅ A new person: create the candidate
     candidate = Candidate(
         job_id=job.id,
         name=Path(file_name).stem[:100],  # temporary name until the AI reads the resume
+        email=email,
         resume_file=str(saved_path),
+        resume_text=resume_text,
         status="resume_received",
     )
     db.add(candidate)
     db.commit()
     db.refresh(candidate)
 
-    # 3. Read the text from the file
-    try:
-        resume_text = extract_text(file_name, data)
-    except Exception:
-        resume_text = ""
-    candidate.resume_text = resume_text
-
-    if len(resume_text.strip()) < 50:
+    # 7. Ask Agent 1 to score it
+    result, problem = score_text(job, resume_text)
+    if result:
+        apply_score(candidate, job, result, db)
+        candidate.status = "scored"
+    else:
         candidate.status = "needs_manual_review"
-        db.commit()
-        return UploadResult(file_name=file_name, status="needs_manual_review",
-                            candidate_id=candidate.id,
-                            detail="Could not read enough text (it may be a scanned image).")
 
-    # 4. Ask Agent 1 to score it
-    try:
-        result = score_resume(job.jd_text, job.rubric, resume_text)
-    except Exception as error:
-        candidate.status = "needs_manual_review"
-        db.commit()
-        return UploadResult(file_name=file_name, status="needs_manual_review",
-                            candidate_id=candidate.id,
-                            detail=f"AI scoring failed: {error}")
-
-    # 5. Save the contact details and the evaluation
-    contact = result["candidate"]
-    candidate.name = (contact.get("name") or candidate.name)[:100]
-    candidate.email = contact.get("email")
-    candidate.phone = contact.get("phone")
-    candidate.status = "scored"
-    db.add(ResumeEvaluation(
-        candidate_id=candidate.id,
-        job_id=job.id,
-        overall_score=result["overall_score"],
-        criterion_scores=result["criterion_scores"],
-        evidence=result["evidence"],
-        missing_or_unclear=result["missing_or_unclear"],
-        warnings=result["warnings"],
-        summary=result["summary"],
-        model_version=result["model_version"],
-    ))
+    db.add(ResumeVersion(candidate_id=candidate.id, job_id=job.id, file_hash=fingerprint, file_name=file_name,
+                         resume_file=str(saved_path), overall_score=result["overall_score"] if result else None))
     db.commit()
 
+    if not result:
+        return UploadResult(file_name=file_name, status="needs_manual_review",
+                            candidate_id=candidate.id, detail=problem)
     return UploadResult(file_name=file_name, status="scored",
-                        candidate_id=candidate.id,
-                        overall_score=result["overall_score"])
+                        candidate_id=candidate.id, overall_score=result["overall_score"])
+
+
+def update_candidate_cv(
+    candidate: Candidate,
+    job: Job,
+    file_name: str,
+    saved_path: Path,
+    fingerprint: str,
+    resume_text: str,
+    db: Session,
+    user: User,
+) -> UploadResult:
+    """The same person sent a new CV: re-score it, keep the old version in history."""
+    old_status = candidate.status
+    old_score = candidate.evaluation.overall_score if candidate.evaluation else None
+
+    # The old versions stay in the database, they are just no longer "current"
+    for version in candidate.versions:
+        version.is_current = False
+
+    candidate.resume_file = str(saved_path)
+    candidate.resume_text = resume_text
+
+    result, problem = score_text(job, resume_text)
+    if result:
+        apply_score(candidate, job, result, db)
+        new_score = result["overall_score"]
+    else:
+        # The new CV could not be scored: remove the old marks (they belong to the old CV)
+        if candidate.evaluation:
+            db.delete(candidate.evaluation)
+        new_score = None
+
+    # A shortlisted candidate stays shortlisted (HR decided that), but HR is asked to re-check
+    if old_status == "shortlisted":
+        new_status = "shortlisted"
+    else:
+        new_status = "scored" if result else "needs_manual_review"
+    candidate.status = new_status
+
+    db.add(ResumeVersion(candidate_id=candidate.id, job_id=job.id, file_hash=fingerprint, file_name=file_name,
+                         resume_file=str(saved_path), overall_score=new_score))
+
+    # Write it in the history (audit trail), e.g. "CV updated (sara_v2.pdf) · score 72 → 81"
+    old_text = old_score if old_score is not None else "not scored"
+    new_text = new_score if new_score is not None else "not scored"
+    message = f"CV updated ({file_name}) · score {old_text} → {new_text}"
+    if old_status == "shortlisted":
+        message += " · CV changed after shortlisting, please re-check"
+    db.add(CandidateDecision(candidate_id=candidate.id, job_id=job.id, from_status=old_status,
+                             to_status=new_status, reason=message, decided_by=user.id))
+    db.commit()
+
+    detail = f"Updated CV for {candidate.name}: score {old_text} → {new_text}."
+    if old_status == "shortlisted":
+        detail += " Still shortlisted, please re-check."
+    if problem:
+        detail += f" {problem}"
+    return UploadResult(file_name=file_name, status="updated", candidate_id=candidate.id,
+                        overall_score=new_score, detail=detail)
 
 
 # 📄 Upload ONE resume (shows a "Choose File" button on /docs)
@@ -137,22 +285,27 @@ def upload_one_resume(
     job_id: int,
     file: UploadFile = File(..., description="One resume (PDF or DOCX)"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Upload a single resume for an approved job. It is saved and scored by Agent 1."""
     job = get_job_ready_for_resumes(job_id, db)
-    return process_resume(job, file, db)
+    backfill_versions(job, db)
+    return process_resume(job, file, db, current_user)
 
 
-# 📥 Upload MANY resumes at once (used by the website later)
+# 📥 Upload MANY resumes at once (used by the website)
 @router.post("/api/jobs/{job_id}/resumes", response_model=UploadSummary)
 def upload_resumes(
     job_id: int,
     files: list[UploadFile] = File(..., description="One or more resumes (PDF or DOCX)"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """Upload several resumes for an approved job. Each one is saved and scored by Agent 1."""
+    """Upload several resumes for an approved job. Duplicates are skipped, updated CVs
+    replace the old version (kept in history), and new CVs are scored by Agent 1."""
     job = get_job_ready_for_resumes(job_id, db)
-    results = [process_resume(job, file, db) for file in files]
+    backfill_versions(job, db)
+    results = [process_resume(job, file, db, current_user) for file in files]
     return UploadSummary(job_id=job.id, total_files=len(files), results=results)
 
 
@@ -320,11 +473,15 @@ def decide_candidate(
     reason = (decision_in.reason or "").strip() or None
 
     if decision_in.decision == "undo":
-        # Go back to the status the candidate had before the last decision
-        if candidate.status not in UNDOABLE or not candidate.decisions:
+        # Go back to the status the candidate had before the last real status change
+        # (history rows like "CV updated" keep the same status, so they are skipped)
+        last_change = next(
+            (d for d in reversed(candidate.decisions) if d.from_status != d.to_status), None
+        )
+        if candidate.status not in UNDOABLE or last_change is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="There is no decision to undo.")
-        new_status = candidate.decisions[-1].from_status
+        new_status = last_change.from_status
         reason = reason or "Decision undone"
     else:
         new_status = decision_in.decision
