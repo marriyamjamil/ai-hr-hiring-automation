@@ -1,7 +1,7 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 EmploymentType = Literal["Full-time", "Part-time", "Contract", "Internship", "Temporary"]
 WorkArrangement = Literal["On-site", "Hybrid", "Remote"]
@@ -320,3 +320,239 @@ class InviteOut(BaseModel):
     expires_at: datetime
     created_at: datetime
     used_at: datetime | None
+
+
+# ---------- Interviewers (Agent 3) ----------
+
+TIME_PATTERN = r"^([01]\d|2[0-3]):[0-5]\d$"  # "00:00" ... "23:59"
+
+
+# One weekly free block, e.g. Monday 14:00-17:00 (Pakistan time)
+class AvailabilitySlot(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    weekday: int = Field(ge=0, le=6, examples=[0])  # 0 = Monday ... 6 = Sunday
+    start_time: str = Field(pattern=TIME_PATTERN, examples=["14:00"])
+    end_time: str = Field(pattern=TIME_PATTERN, examples=["17:00"])
+
+    @model_validator(mode="after")
+    def end_after_start(self):
+        # "HH:MM" text can be compared directly: "14:00" < "17:00"
+        if self.end_time <= self.start_time:
+            raise ValueError("The end time must be after the start time.")
+        return self
+
+
+# Days an interviewer is away
+class TimeOffIn(BaseModel):
+    start_date: date = Field(examples=["2026-11-20"])
+    end_date: date = Field(examples=["2026-11-22"])  # the last day away (included)
+    reason: str | None = Field(default=None, max_length=200, examples=["Annual leave"])
+
+    @model_validator(mode="after")
+    def end_not_before_start(self):
+        if self.end_date < self.start_date:
+            raise ValueError("The last day off can't be before the first day off.")
+        return self
+
+
+class TimeOffOut(TimeOffIn):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+
+
+# What HR sends to add or edit an interviewer (the whole form at once)
+class InterviewerIn(BaseModel):
+    name: str = Field(min_length=2, max_length=100, examples=["Sara Khan"])
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255, examples=["sara@abctech.example"])
+    job_title: str | None = Field(default=None, max_length=100, examples=["Senior Developer"])
+    meeting_link: str | None = Field(
+        default=None, max_length=500, pattern=r"^https?://", examples=["https://meet.google.com/abc-defg-hij"]
+    )
+    is_active: bool = True
+    job_ids: list[int] = Field(default_factory=list, examples=[[1]])  # the jobs they interview for
+    availability: list[AvailabilitySlot] = Field(default_factory=list)
+    time_off: list[TimeOffIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def no_overlapping_hours(self):
+        # Sort by day and start time, then compare each block with the next one
+        slots = sorted(self.availability, key=lambda s: (s.weekday, s.start_time))
+        for before, after in zip(slots, slots[1:]):
+            if before.weekday == after.weekday and after.start_time < before.end_time:
+                raise ValueError("Two weekly time blocks overlap on the same day.")
+        return self
+
+
+# A job, as shown inside an interviewer
+class InterviewerJob(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+
+
+# An interviewer as the API shows it
+class InterviewerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    email: str
+    job_title: str | None
+    meeting_link: str | None
+    is_active: bool
+    created_at: datetime
+    jobs: list[InterviewerJob]
+    availability: list[AvailabilitySlot]
+    time_off: list[TimeOffOut]
+
+
+# ---------- Interview scheduling (Agent 3) ----------
+
+# One time window the candidate is free, e.g. 2026-11-17 14:00-18:00 (Pakistan time)
+class TimeWindow(BaseModel):
+    day: date
+    start: str  # "HH:MM"
+    end: str
+
+
+# What Agent 3 understood from the candidate's answer on the screening call
+class CandidateAvailabilityOut(BaseModel):
+    source_text: str | None  # what the candidate said, e.g. "Monday after 2 pm; Wednesday morning"
+    call_date: date
+    windows: list[TimeWindow]  # in the candidate's order: first choice first
+    flexible: bool  # True = "any time is fine"
+    note: str  # how the AI understood it
+
+
+# One free interview slot (times include the Pakistan offset, e.g. 2026-11-17T14:00:00+05:00)
+class SlotOut(BaseModel):
+    interviewer_id: int
+    interviewer_name: str
+    start: datetime
+    end: datetime
+
+
+# Agent 3's suggestion for one candidate
+class SlotSuggestionsOut(BaseModel):
+    # matched / flexible / no_match / no_times / no_free_time / no_interviewers
+    status: str
+    reason: str  # why Agent 3 decided this (shown to HR)
+    availability: CandidateAvailabilityOut  # what the candidate asked for
+    best: SlotOut | None  # the suggested interview time (None = nothing matched)
+    backups: list[SlotOut]  # nearest other free times
+
+
+# What HR sends to approve one slot (the human approval gate)
+class InterviewApproveIn(BaseModel):
+    interviewer_id: int
+    start: datetime = Field(examples=["2026-11-16T14:00:00+05:00"])  # must include the time zone
+    mode: Literal["online", "onsite"] = "online"
+    location: str | None = Field(default=None, max_length=500)  # the office address, for on-site
+    reason: str | None = Field(default=None, max_length=500)  # Agent 3's reason (saved for the audit trail)
+    candidate_windows: list[TimeWindow] = Field(default_factory=list)  # what the candidate asked for
+
+    @model_validator(mode="after")
+    def start_has_time_zone(self):
+        if self.start.tzinfo is None:
+            raise ValueError("The start time must include a time zone, e.g. +05:00.")
+        return self
+
+
+# An interview booking as HR sees it
+class InterviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    candidate_id: int
+    job_id: int
+    interviewer_id: int
+    interviewer_name: str
+    start_at: datetime
+    end_at: datetime
+    mode: str  # online / onsite
+    location: str | None  # the meeting link or office address
+    status: str  # awaiting_candidate / scheduled / cancelled / completed
+    candidate_windows: list
+    ai_reason: str | None
+    approved_at: datetime | None
+    created_at: datetime
+
+    @field_validator("start_at", "end_at", "approved_at", "created_at", mode="after")
+    @classmethod
+    def mark_as_utc(cls, value: datetime | None) -> datetime | None:
+        # SQLite forgets the time zone; we always save UTC, so say so (the browser then shows the right time)
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+
+# One email in the Outbox
+class EmailOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    to_email: str
+    to_name: str | None
+    subject: str
+    body: str
+    ics: str | None  # the calendar file, if any
+    candidate_id: int | None
+    interview_id: int | None
+    status: str  # queued / sent / failed / held
+    error: str | None
+    created_at: datetime
+    sent_at: datetime | None
+
+    @field_validator("created_at", "sent_at", mode="after")
+    @classmethod
+    def mark_as_utc(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+
+# The candidate's booking link, as HR sees it
+class BookingLinkOut(BaseModel):
+    token: str
+    status: str  # pending / used / cancelled / expired
+    expires_at: datetime
+    used_at: datetime | None
+
+
+# ---------- Candidate booking page (Agent 3: public, the token is the key) ----------
+
+# One interview time, as the candidate sees it (no interviewer email or other private data)
+class BookingSlot(BaseModel):
+    interviewer_id: int
+    interviewer_name: str
+    start: datetime
+    end: datetime
+
+
+# What the candidate's booking page shows
+class BookingInfo(BaseModel):
+    candidate_name: str
+    job_title: str
+    company_name: str
+    status: str  # the link: pending / used / cancelled / expired
+    held: BookingSlot | None  # the candidate's interview time (None = cancelled)
+    confirmed: bool  # True = the time is final (HR approved it)
+    mode: str | None  # online / onsite
+    location: str | None  # meeting link or address: only shown once the time is final
+    options: list[BookingSlot]  # other free times the candidate can choose instead
+    expires_at: datetime
+
+
+# The candidate chooses another time
+class BookingChooseIn(BaseModel):
+    interviewer_id: int
+    start: datetime
+
+    @model_validator(mode="after")
+    def start_has_time_zone(self):
+        if self.start.tzinfo is None:
+            raise ValueError("The start time must include a time zone, e.g. +05:00.")
+        return self

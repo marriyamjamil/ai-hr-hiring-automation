@@ -15,6 +15,7 @@ const filters = [
   { value: "shortlisted", label: "Shortlisted" },
   { value: "screened", label: "Screened" },
   { value: "interview_invited", label: "Interview" },
+  { value: "interview_scheduled", label: "Scheduled" },
   { value: "rejected", label: "Rejected" },
   { value: "needs_manual_review", label: "Needs review" },
 ];

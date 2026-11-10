@@ -15,6 +15,7 @@ function allowedChoices(status: string): Choice[] {
   if (status === "shortlisted") return ["rejected", "undo"];
   if (status === "screened") return ["interview_invited", "rejected"];
   if (status === "interview_invited") return ["rejected", "undo"];
+  if (status === "interview_scheduled") return ["rejected"]; // the candidate confirmed: only reject is possible
   if (status === "rejected") return ["undo"];
   return []; // e.g. resume_received or screening_in_progress
 }

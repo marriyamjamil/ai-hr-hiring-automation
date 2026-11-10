@@ -11,10 +11,13 @@ from app.agents.resume_scorer import extract_text, score_resume
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.booking_links import cancel_open_links
+from app.emails import send_cancellation
 from app.invites import cancel_open_invites, create_invite
 from app.models import (
     Candidate,
     CandidateDecision,
+    Interview,
     Job,
     ResumeEvaluation,
     ResumeVersion,
@@ -41,9 +44,10 @@ ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 # (Undo is handled separately: it goes back to the status before the last decision.)
 ALLOWED_FROM = {
     "shortlisted": {"scored", "needs_manual_review"},
-    "rejected": {"scored", "needs_manual_review", "shortlisted", "screened", "interview_invited"},
+    "rejected": {"scored", "needs_manual_review", "shortlisted", "screened", "interview_invited", "interview_scheduled"},
     "interview_invited": {"screened"},  # only after a finished screening call
 }
+# "interview_scheduled" is set only by the candidate confirming their time (Agent 3), never by HR directly
 UNDOABLE = {"shortlisted", "rejected", "interview_invited"}
 
 
@@ -492,6 +496,8 @@ def decide_candidate(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="There is no decision to undo.")
         new_status = last_change.from_status
+        if new_status == "interview_scheduled":
+            new_status = "interview_invited"  # the old interview was cancelled, so it must be scheduled again
         reason = reason or "Decision undone"
     else:
         new_status = decision_in.decision
@@ -518,6 +524,19 @@ def decide_candidate(
         create_invite(candidate, current_user, db)
     else:
         cancel_open_invites(candidate, db)
+    # Not invited any more (rejected or undone) → free any interview slot held for them (Agent 3)
+    if new_status != "interview_invited":
+        cancel_open_links(candidate.id, db)  # their booking link stops working too
+        for interview in db.scalars(
+            select(Interview).where(
+                Interview.candidate_id == candidate.id,
+                Interview.status.in_(("proposed", "awaiting_candidate", "scheduled")),
+            )
+        ).all():
+            if interview.status == "scheduled":
+                # 📧 Tell the interviewer. The candidate is NOT emailed here: HR tells them about the decision.
+                send_cancellation(interview, candidate, db, notify_candidate=False)
+            interview.status = "cancelled"
     db.commit()
     db.refresh(candidate)
     return candidate

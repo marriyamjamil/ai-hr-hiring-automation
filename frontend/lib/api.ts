@@ -182,6 +182,145 @@ export type InterviewFinish = {
   message: string;
 };
 
+// ---------- Interviewers (Agent 3) ----------
+
+// One weekly free block, e.g. { weekday: 0, start_time: "14:00", end_time: "17:00" } = Monday 2-5 pm
+export type AvailabilitySlot = {
+  weekday: number; // 0 = Monday ... 6 = Sunday
+  start_time: string; // "HH:MM", Pakistan time
+  end_time: string;
+};
+
+// Days an interviewer is away
+export type TimeOff = {
+  id: number;
+  start_date: string; // "2026-11-20"
+  end_date: string; // the last day away (included)
+  reason: string | null;
+};
+
+export type Interviewer = {
+  id: number;
+  name: string;
+  email: string;
+  job_title: string | null;
+  meeting_link: string | null;
+  is_active: boolean;
+  created_at: string;
+  jobs: { id: number; title: string }[];
+  availability: AvailabilitySlot[];
+  time_off: TimeOff[];
+};
+
+// What we send to add or edit an interviewer (the whole form)
+export type InterviewerInput = {
+  name: string;
+  email: string;
+  job_title: string | null;
+  meeting_link: string | null;
+  is_active: boolean;
+  job_ids: number[];
+  availability: AvailabilitySlot[];
+  time_off: { start_date: string; end_date: string; reason: string | null }[];
+};
+
+// ---------- Interview scheduling (Agent 3) ----------
+
+// One time window the candidate is free (Pakistan time)
+export type TimeWindow = { day: string; start: string; end: string }; // "2026-11-16", "14:00", "18:00"
+
+// What Agent 3 understood from the screening call
+export type CandidateAvailability = {
+  source_text: string | null; // what the candidate said
+  call_date: string;
+  windows: TimeWindow[]; // first choice first
+  flexible: boolean;
+  note: string;
+};
+
+// One free interview slot (ISO times with +05:00)
+export type Slot = {
+  interviewer_id: number;
+  interviewer_name: string;
+  start: string;
+  end: string;
+};
+
+export type SlotSuggestions = {
+  status: "matched" | "flexible" | "no_match" | "no_times" | "no_free_time" | "no_interviewers" | string;
+  reason: string;
+  availability: CandidateAvailability;
+  best: Slot | null;
+  backups: Slot[];
+};
+
+export type Interview = {
+  id: number;
+  candidate_id: number;
+  job_id: number;
+  interviewer_id: number;
+  interviewer_name: string;
+  start_at: string;
+  end_at: string;
+  mode: "online" | "onsite" | string;
+  location: string | null;
+  status: "awaiting_candidate" | "scheduled" | "cancelled" | "completed" | string;
+  candidate_windows: TimeWindow[];
+  ai_reason: string | null;
+  approved_at: string | null;
+  created_at: string;
+};
+
+// One email in the Outbox
+export type OutboxEmail = {
+  id: number;
+  to_email: string;
+  to_name: string | null;
+  subject: string;
+  body: string;
+  ics: string | null; // the calendar file, if any
+  candidate_id: number | null;
+  interview_id: number | null;
+  status: "queued" | "sent" | "failed" | "held" | string;
+  error: string | null;
+  created_at: string;
+  sent_at: string | null;
+};
+
+// The candidate's booking link, as HR sees it
+export type BookingLink = {
+  token: string;
+  status: string; // pending / used / cancelled / expired
+  expires_at: string;
+  used_at: string | null;
+};
+
+// One interview time on the candidate's booking page
+export type BookingSlot = { interviewer_id: number; interviewer_name: string; start: string; end: string };
+
+// What the candidate's booking page shows (public)
+export type BookingInfo = {
+  candidate_name: string;
+  job_title: string;
+  company_name: string;
+  status: string; // pending / used / cancelled / expired
+  held: BookingSlot | null; // the candidate's interview time (null = cancelled)
+  confirmed: boolean; // true = the time is final (HR approved it)
+  mode: string | null; // online / onsite
+  location: string | null; // only once confirmed
+  options: BookingSlot[]; // other free times
+  expires_at: string;
+};
+
+export type InterviewApproval = {
+  interviewer_id: number;
+  start: string;
+  mode: "online" | "onsite";
+  location?: string | null;
+  reason?: string | null;
+  candidate_windows?: TimeWindow[];
+};
+
 // What HR fills in for Agent 0 (the AI job description writer)
 export type JDGenerateRequest = {
   title: string;
@@ -260,8 +399,13 @@ export function clearToken() {
 
 // Turn a backend error into a friendly message
 function errorMessage(data: unknown, fallback: string): string {
-  if (data && typeof data === "object" && "detail" in data && typeof data.detail === "string") {
-    return data.detail;
+  if (data && typeof data === "object" && "detail" in data) {
+    const detail = data.detail;
+    if (typeof detail === "string") return detail;
+    // 422 = the form had a mistake: FastAPI sends a list of problems, we show the first one
+    if (Array.isArray(detail) && typeof detail[0]?.msg === "string") {
+      return detail[0].msg.replace(/^Value error, /, "");
+    }
   }
   return fallback;
 }
@@ -374,6 +518,39 @@ export const getInvite = (candidateId: number) =>
   apiFetch<ScreeningInvite | null>(`/api/candidates/${candidateId}/invite`);
 export const createInvite = (candidateId: number) =>
   apiFetch<ScreeningInvite>(`/api/candidates/${candidateId}/invite`, { method: "POST" });
+
+// Interviewers (Agent 3)
+export const getInterviewers = () => apiFetch<Interviewer[]>("/api/interviewers");
+export const createInterviewer = (data: InterviewerInput) =>
+  apiFetch<Interviewer>("/api/interviewers", jsonBody("POST", data));
+export const updateInterviewer = (interviewerId: number, data: InterviewerInput) =>
+  apiFetch<Interviewer>(`/api/interviewers/${interviewerId}`, jsonBody("PUT", data));
+export const deleteInterviewer = (interviewerId: number) =>
+  apiFetch<void>(`/api/interviewers/${interviewerId}`, { method: "DELETE" });
+
+// Interview scheduling (Agent 3)
+export const getSlotSuggestions = (candidateId: number) =>
+  apiFetch<SlotSuggestions>(`/api/candidates/${candidateId}/slot-suggestions`);
+export const getInterviews = (candidateId: number) =>
+  apiFetch<Interview[]>(`/api/candidates/${candidateId}/interviews`);
+export const approveInterview = (candidateId: number, data: InterviewApproval) =>
+  apiFetch<Interview>(`/api/candidates/${candidateId}/interviews`, jsonBody("POST", data));
+export const cancelInterview = (interviewId: number) =>
+  apiFetch<Interview>(`/api/interviews/${interviewId}/cancel`, { method: "POST" });
+export const getEmails = (candidateId?: number) =>
+  apiFetch<OutboxEmail[]>(candidateId ? `/api/emails?candidate_id=${candidateId}` : "/api/emails");
+export const sendEmailNow = (emailId: number) =>
+  apiFetch<OutboxEmail>(`/api/emails/${emailId}/send`, { method: "POST" });
+export const getBookingLink = (candidateId: number) =>
+  apiFetch<BookingLink | null>(`/api/candidates/${candidateId}/booking-link`);
+
+// Candidate booking page (public: the token in the link is the permission)
+const bookingPath = (token: string) => `/api/booking/${encodeURIComponent(token)}`;
+export const getBooking = (token: string) => apiFetch<BookingInfo>(bookingPath(token));
+export const confirmBooking = (token: string) =>
+  apiFetch<BookingInfo>(`${bookingPath(token)}/confirm`, { method: "POST" });
+export const chooseBooking = (token: string, slot: { interviewer_id: number; start: string }) =>
+  apiFetch<BookingInfo>(`${bookingPath(token)}/choose`, jsonBody("POST", slot));
 
 // Candidate interview (public: the token in the link is the permission)
 const interviewPath = (token: string) => `/api/interview/${encodeURIComponent(token)}`;

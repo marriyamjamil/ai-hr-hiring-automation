@@ -1,7 +1,7 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, Boolean, Column, Date, DateTime, ForeignKey, String, Table, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -203,3 +203,143 @@ class ScreeningInvite(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     candidate: Mapped["Candidate"] = relationship()
+
+
+# ======================= Agent 3: interview scheduling =======================
+
+# Which interviewer can interview for which job (many-to-many: just pairs of ids)
+interviewer_jobs = Table(
+    "interviewer_jobs",
+    Base.metadata,
+    Column("interviewer_id", ForeignKey("interviewers.id"), primary_key=True),
+    Column("job_id", ForeignKey("jobs.id"), primary_key=True),
+)
+
+
+class Interviewer(Base):
+    """A person in the company who takes interviews (not a login user)."""
+
+    __tablename__ = "interviewers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    job_title: Mapped[str | None] = mapped_column(String(100))  # e.g. "Senior Developer"
+    meeting_link: Mapped[str | None] = mapped_column(String(500))  # their Zoom / Google Meet room
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)  # False = don't book them any more
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    jobs: Mapped[list["Job"]] = relationship(secondary=interviewer_jobs)
+    # delete-orphan: when HR saves new weekly hours, the old rows are removed automatically
+    availability: Mapped[list["InterviewerAvailability"]] = relationship(
+        back_populates="interviewer", order_by="InterviewerAvailability.weekday", cascade="all, delete-orphan"
+    )
+    time_off: Mapped[list["InterviewerTimeOff"]] = relationship(
+        back_populates="interviewer", order_by="InterviewerTimeOff.start_date", cascade="all, delete-orphan"
+    )
+
+
+class InterviewerAvailability(Base):
+    """One block of free time that repeats every week, e.g. Monday 14:00-17:00 (Pakistan time)."""
+
+    __tablename__ = "interviewer_availability"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    interviewer_id: Mapped[int] = mapped_column(ForeignKey("interviewers.id"))
+    weekday: Mapped[int]  # 0 = Monday ... 6 = Sunday (same as Python's date.weekday())
+    start_time: Mapped[str] = mapped_column(String(5))  # "14:00"
+    end_time: Mapped[str] = mapped_column(String(5))  # "17:00"
+
+    interviewer: Mapped["Interviewer"] = relationship(back_populates="availability")
+
+
+class InterviewerTimeOff(Base):
+    """Days when an interviewer is away (leave, holiday). No interviews are booked on these days."""
+
+    __tablename__ = "interviewer_time_off"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    interviewer_id: Mapped[int] = mapped_column(ForeignKey("interviewers.id"))
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)  # the last day away (included)
+    reason: Mapped[str | None] = mapped_column(String(200))
+
+    interviewer: Mapped["Interviewer"] = relationship(back_populates="time_off")
+
+
+class Interview(Base):
+    """One interview booking made by Agent 3.
+
+    awaiting_candidate = HR approved Agent 3's slot; it is held while the candidate confirms
+    scheduled          = the candidate confirmed; emails and calendar invites go to both people
+    cancelled / completed
+    """
+
+    __tablename__ = "interviews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"))
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    interviewer_id: Mapped[int] = mapped_column(ForeignKey("interviewers.id"))
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # saved in UTC
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    mode: Mapped[str] = mapped_column(String(20), default="online")  # online / onsite
+    location: Mapped[str | None] = mapped_column(String(500))  # the meeting link or office address
+    status: Mapped[str] = mapped_column(String(20), default="proposed")
+
+    # How Agent 3 decided (shown to HR, for the audit trail)
+    candidate_windows: Mapped[list] = mapped_column(JSON, default=list)  # what the AI understood from the call
+    ai_reason: Mapped[str | None] = mapped_column(Text)  # e.g. "Earliest time both are free"
+
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))  # the HR user who approved
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    candidate: Mapped["Candidate"] = relationship()
+    interviewer: Mapped["Interviewer"] = relationship()
+
+    @property
+    def interviewer_name(self) -> str:
+        """Shown on the HR page and in emails."""
+        return self.interviewer.name
+
+
+class BookingLink(Base):
+    """A private link where the candidate confirms the held interview time or picks another one.
+
+    Made automatically when HR approves a slot. The candidate opens /book/<token> (no login).
+    pending = can be used, used = the candidate confirmed or chose, cancelled = HR cancelled
+    """
+
+    __tablename__ = "booking_links"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"))
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    interview_id: Mapped[int | None] = mapped_column(ForeignKey("interviews.id"))  # the held interview
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # the secret part of the link
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    candidate: Mapped["Candidate"] = relationship()
+
+
+class EmailOutbox(Base):
+    """Every email the system sends. For now they wait here (safe testing); later Gmail sends them."""
+
+    __tablename__ = "email_outbox"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    to_email: Mapped[str] = mapped_column(String(255))
+    to_name: Mapped[str | None] = mapped_column(String(100))
+    subject: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str] = mapped_column(Text)
+    ics: Mapped[str | None] = mapped_column(Text)  # the calendar file (.ics), if there is one
+    candidate_id: Mapped[int | None] = mapped_column(ForeignKey("candidates.id"))
+    interview_id: Mapped[int | None] = mapped_column(ForeignKey("interviews.id"))
+    status: Mapped[str] = mapped_column(String(20), default="queued")  # queued / sent / failed / held (old test email)
+    error: Mapped[str | None] = mapped_column(Text)  # why sending failed
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

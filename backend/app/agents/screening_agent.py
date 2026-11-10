@@ -40,7 +40,7 @@ def hr_questions(location: str | None) -> list[str]:
         "What salary are you expecting for this role?",
         location_question,
         "What is the main reason you are looking for a change?",
-        "Which days and times next week would suit you for an interview?",
+        "For the interview, could you tell me two or three days and times in the next two weeks that would suit you?",
         "Do you have any questions for us?",
     ]
 
@@ -88,6 +88,8 @@ RULES
 - Keep each value short and factual (a few words or one short sentence), e.g. "1 month, can join 15 December".
 - Keep numbers and currencies exactly as said, e.g. "PKR 150,000 per month".
 - For candidate_questions, write the candidate's questions, or "No questions" if they had none.
+- For interview_availability, write EVERY option the candidate gave, in the order they said them,
+  with the day and time words exactly as said, separated by "; ", e.g. "Monday after 2 pm; Wednesday morning".
 - "concerns" lists practical points HR should check, e.g. a long notice period, an unclear salary
   expectation, or not being comfortable with the location. Use an empty list if there are none.
 - Do not judge skills. Ignore name, gender, age, religion, nationality, accent and grammar.
@@ -183,7 +185,10 @@ HOW THE CALL GOES
 {numbered}
 4. If an answer is unclear (for example no number for the notice period or salary), ask ONE short follow-up.
    If the candidate prefers not to share their salary, say "That's completely fine" and move on.
-5. After the last question, say exactly: "{CLOSING_MESSAGE}"
+5. For the interview times question: if the candidate gives only one option, politely ask once for one or two more.
+   Then say: "Thank you. We'll check with the interviewer and confirm the interview time by email."
+   Never say a time is booked, free or confirmed: you cannot see the calendar.
+6. After the last question, say exactly: "{CLOSING_MESSAGE}"
 
 RULES
 - Be warm, polite and brief: 1-2 sentences per turn. Speak clearly.

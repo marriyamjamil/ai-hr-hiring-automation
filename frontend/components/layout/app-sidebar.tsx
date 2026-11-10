@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BrainCircuit, Briefcase, Globe, LayoutDashboard, LogOut, Settings, Sparkles, Users } from "lucide-react";
+import { BrainCircuit, Briefcase, CalendarClock, Globe, LayoutDashboard, LogOut, Mail, Settings, Sparkles, Users } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 
@@ -11,6 +11,8 @@ export const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/jobs", label: "Jobs", icon: Briefcase },
   { href: "/candidates", label: "Candidates", icon: Users },
+  { href: "/interviewers", label: "Interviewers", icon: CalendarClock },
+  { href: "/outbox", label: "Outbox", icon: Mail },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -74,8 +76,8 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       {/* Promo card */}
       <div className="relative mx-4 mb-4 overflow-hidden rounded-2xl border border-white/10 bg-linear-to-br from-indigo-600/30 to-fuchsia-600/20 p-4">
         <Sparkles className="size-5 text-indigo-300" />
-        <p className="mt-2 text-sm font-semibold text-white">Screening calls</p>
-        <p className="mt-1 text-xs text-zinc-400">Agent 2 is on the way: AI voice screening for your shortlist.</p>
+        <p className="mt-2 text-sm font-semibold text-white">Interview scheduling</p>
+        <p className="mt-1 text-xs text-zinc-400">Agent 3 is on the way: it matches candidates with free interviewers.</p>
       </div>
 
       {/* Logged-in user + sign out */}
