@@ -308,8 +308,11 @@ export const getShortlistSuggestion = (jobId: number, top: number, minScore: num
   apiFetch<CandidateSummary[]>(`/api/jobs/${jobId}/shortlist-suggestion?top=${top}&min_score=${minScore}`);
 export const approveShortlist = (jobId: number, candidateIds: number[]) =>
   apiFetch<ShortlistResult>(`/api/jobs/${jobId}/shortlist`, jsonBody("POST", { candidate_ids: candidateIds }));
-export const decideCandidate = (candidateId: number, decision: "shortlisted" | "rejected" | "undo", reason?: string) =>
-  apiFetch<CandidateDetail>(`/api/candidates/${candidateId}/decision`, jsonBody("POST", { decision, reason }));
+export const decideCandidate = (
+  candidateId: number,
+  decision: "shortlisted" | "rejected" | "undo" | "interview_invited",
+  reason?: string,
+) => apiFetch<CandidateDetail>(`/api/candidates/${candidateId}/decision`, jsonBody("POST", { decision, reason }));
 
 // Upload CVs: files go as "form data" (like a form with file pickers), not JSON
 export function uploadResumes(jobId: number, files: File[]) {

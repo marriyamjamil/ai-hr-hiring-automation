@@ -179,7 +179,7 @@ class DecisionOut(BaseModel):
 
 # What HR sends to decide about ONE candidate
 class DecisionIn(BaseModel):
-    decision: Literal["shortlisted", "rejected", "undo"] = Field(examples=["rejected"])
+    decision: Literal["shortlisted", "rejected", "undo", "interview_invited"] = Field(examples=["rejected"])
     reason: str | None = Field(default=None, max_length=500, examples=["Less than 1 year of Python experience"])
 
 

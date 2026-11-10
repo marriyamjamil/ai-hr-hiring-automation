@@ -1,20 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, History, Loader2, Undo2, XCircle } from "lucide-react";
+import { CalendarCheck, CheckCircle2, History, Loader2, Undo2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/shared/status-badge";
 import { decideCandidate, type CandidateDetail } from "@/lib/api";
 
-type Choice = "shortlisted" | "rejected" | "undo";
+type Choice = "shortlisted" | "rejected" | "undo" | "interview_invited";
 
 // Which buttons make sense for each status (same rules as the backend's state machine)
 function allowedChoices(status: string): Choice[] {
   if (status === "scored" || status === "needs_manual_review") return ["shortlisted", "rejected"];
   if (status === "shortlisted") return ["rejected", "undo"];
+  if (status === "screened") return ["interview_invited", "rejected"];
+  if (status === "interview_invited") return ["rejected", "undo"];
   if (status === "rejected") return ["undo"];
-  return []; // e.g. resume_received: still being processed
+  return []; // e.g. resume_received or screening_in_progress
 }
 
 function formatDateTime(value: string) {
@@ -45,7 +47,12 @@ export function DecisionPanel({
       const updated = await decideCandidate(candidate.id, choice, reason.trim() || undefined);
       onChange(updated); // the page shows the new status + history straight away
       setReason("");
-      const messages = { shortlisted: "Candidate shortlisted.", rejected: "Candidate rejected.", undo: "Decision undone." };
+      const messages = {
+        shortlisted: "Candidate shortlisted.",
+        rejected: "Candidate rejected.",
+        undo: "Decision undone.",
+        interview_invited: "Candidate invited to interview.",
+      };
       toast.success(messages[choice]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save the decision.");
@@ -69,9 +76,7 @@ export function DecisionPanel({
           <p className="text-sm text-muted-foreground">
             {candidate.status === "screening_in_progress"
               ? "A screening call is in progress. You can decide after the call."
-              : candidate.status === "screened"
-                ? "The screening call is done. Read the report below."
-                : "No decision is possible yet. The CV is still being processed."}
+              : "No decision is possible yet. The CV is still being processed."}
           </p>
         ) : (
           <>
@@ -92,6 +97,21 @@ export function DecisionPanel({
                 >
                   {busy === "shortlisted" ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
                   Shortlist for screening
+                </button>
+              )}
+              {choices.includes("interview_invited") && (
+                <button
+                  type="button"
+                  onClick={() => decide("interview_invited")}
+                  disabled={busy !== null}
+                  className={`${buttonBase} bg-emerald-600 text-white hover:bg-emerald-700`}
+                >
+                  {busy === "interview_invited" ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <CalendarCheck className="size-4" />
+                  )}
+                  Invite to interview
                 </button>
               )}
               {choices.includes("rejected") && (

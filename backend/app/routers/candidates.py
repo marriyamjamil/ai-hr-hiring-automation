@@ -11,6 +11,7 @@ from app.agents.resume_scorer import extract_text, score_resume
 from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
+from app.invites import cancel_open_invites, create_invite
 from app.models import (
     Candidate,
     CandidateDecision,
@@ -40,9 +41,10 @@ ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 # (Undo is handled separately: it goes back to the status before the last decision.)
 ALLOWED_FROM = {
     "shortlisted": {"scored", "needs_manual_review"},
-    "rejected": {"scored", "needs_manual_review", "shortlisted"},
+    "rejected": {"scored", "needs_manual_review", "shortlisted", "screened", "interview_invited"},
+    "interview_invited": {"screened"},  # only after a finished screening call
 }
-UNDOABLE = {"shortlisted", "rejected"}
+UNDOABLE = {"shortlisted", "rejected", "interview_invited"}
 
 
 def get_job_ready_for_resumes(job_id: int, db: Session) -> Job:
@@ -450,6 +452,7 @@ def approve_shortlist(
         else:
             reason = "Approved by HR after a manual CV review"
         record_decision(candidate, "shortlisted", reason, current_user, db)
+        create_invite(candidate, current_user, db)  # 🔗 their private screening link (Agent 2)
         shortlisted += 1
 
     db.commit()
@@ -478,7 +481,13 @@ def decide_candidate(
         last_change = next(
             (d for d in reversed(candidate.decisions) if d.from_status != d.to_status), None
         )
-        if candidate.status not in UNDOABLE or last_change is None:
+        # Undo only HR's own decisions. A change made by a screening call
+        # (e.g. "screening in progress → shortlisted" after a cancelled call) can't be undone.
+        if (
+            candidate.status not in UNDOABLE
+            or last_change is None
+            or last_change.from_status == "screening_in_progress"
+        ):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="There is no decision to undo.")
         new_status = last_change.from_status
@@ -493,8 +502,21 @@ def decide_candidate(
         if new_status == "rejected" and not reason:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="Please give a job-related reason for rejecting this candidate.")
+        if new_status == "interview_invited" and not reason:
+            # No reason typed: write one automatically from the latest finished call
+            last_call = next((c for c in reversed(candidate.screening_calls) if c.status == "completed"), None)
+            if last_call and last_call.overall_score is not None:
+                reason = f"Invited after the screening call (call score {last_call.overall_score})"
+            else:
+                reason = "Invited after the screening call"
 
     record_decision(candidate, new_status, reason, current_user, db)
+    # Shortlisted → a private screening link is made automatically (Agent 2).
+    # Any other status → old links stop working.
+    if new_status == "shortlisted":
+        create_invite(candidate, current_user, db)
+    else:
+        cancel_open_invites(candidate, db)
     db.commit()
     db.refresh(candidate)
     return candidate

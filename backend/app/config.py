@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     azure_openai_api_key: str = ""
     azure_openai_deployment: str = "gpt-4o"
 
+    # Vapi (voice screening calls, Agent 2 Stage 2.2). Secret: backend only.
+    vapi_private_key: str = ""
+
     # Resume uploads
     upload_dir: str = "uploads"
     max_upload_mb: int = 5

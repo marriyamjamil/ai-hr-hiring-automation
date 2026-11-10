@@ -176,3 +176,30 @@ class ScreeningCall(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     candidate: Mapped["Candidate"] = relationship(back_populates="screening_calls")
+
+
+class ScreeningInvite(Base):
+    """A private link that lets one candidate do their voice screening call (Stage 2.2).
+
+    Made automatically when HR shortlists a candidate. The candidate opens
+    /interview/<token> (no login needed), talks to Agent 2, and the link is used up.
+    """
+
+    __tablename__ = "screening_invites"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"))
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # the secret part of the link
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending / used / cancelled
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    # Filled in when the candidate does the call
+    screening_call_id: Mapped[int | None] = mapped_column(ForeignKey("screening_calls.id"))
+    vapi_call_id: Mapped[str | None] = mapped_column(String(100))  # Vapi's id, to fetch the transcript
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))  # the HR user who shortlisted
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    candidate: Mapped["Candidate"] = relationship()
