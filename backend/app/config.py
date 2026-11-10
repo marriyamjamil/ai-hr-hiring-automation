@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # Vapi (voice screening calls, Agent 2 Stage 2.2). Secret: backend only.
     vapi_private_key: str = ""
 
+    # The company that uses this system (Agent 2 introduces it on the screening call)
+    company_name: str = "our company"
+    company_about: str = ""
+
     # Resume uploads
     upload_dir: str = "uploads"
     max_upload_mb: int = 5

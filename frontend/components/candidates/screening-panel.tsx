@@ -1,18 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Bot, Info, Loader2, PhoneCall, PhoneOff, RefreshCw, Send, Sparkles, User } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, Bot, Copy, Info, Link2, Loader2, PhoneCall, RefreshCw, Sparkles, User } from "lucide-react";
 import { toast } from "sonner";
 
 import { ScoreRing } from "@/components/shared/score-ring";
 import {
-  cancelScreeningCall,
+  createInvite,
+  getInvite,
   getScreeningCalls,
-  replyToScreeningCall,
   retryScreeningReport,
-  startScreeningCall,
   type CandidateDetail,
   type ScreeningCall,
+  type ScreeningInvite,
   type ScreeningMessage,
   type ScreeningReport,
 } from "@/lib/api";
@@ -35,166 +35,94 @@ const callStatusLabels: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+const inviteLabels: Record<string, { text: string; className: string }> = {
+  pending: { text: "Active", className: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400" },
+  used: { text: "Used", className: "bg-zinc-100 text-zinc-600 dark:bg-zinc-500/10 dark:text-zinc-400" },
+  cancelled: { text: "Cancelled", className: "bg-zinc-100 text-zinc-600 dark:bg-zinc-500/10 dark:text-zinc-400" },
+  expired: { text: "Expired", className: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400" },
+};
+
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-// Agent 2's screening call on the candidate page: start it, chat, and read the report
-export function ScreeningPanel({ candidate, onChange }: { candidate: CandidateDetail; onChange: () => void }) {
+// Agent 2's voice screening call on the candidate page (HR only reads it here)
+export function ScreeningPanel({ candidate }: { candidate: CandidateDetail }) {
   const [calls, setCalls] = useState<ScreeningCall[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [answer, setAnswer] = useState(""); // what HR types as the candidate's answer
   const [busy, setBusy] = useState(false);
-  const chatRef = useRef<HTMLDivElement>(null); // a "handle" to the chat box, to scroll it
+  const [invite, setInvite] = useState<ScreeningInvite | null>(null); // the newest interview link
 
-  // Load this candidate's calls once
+  // Load the calls and the interview link (again whenever the candidate's status changes)
   useEffect(() => {
-    getScreeningCalls(candidate.id)
-      .then(setCalls)
+    Promise.all([getScreeningCalls(candidate.id), getInvite(candidate.id)])
+      .then(([callList, latest]) => {
+        setCalls(callList);
+        setInvite(latest);
+      })
       .catch(() => toast.error("Could not load the screening calls."))
       .finally(() => setLoaded(true));
-  }, [candidate.id]);
+  }, [candidate.id, candidate.status]);
 
   const call = calls.at(-1); // the latest call (the list is oldest first)
 
-  // Keep the newest message in view (like WhatsApp)
-  useEffect(() => {
-    const box = chatRef.current;
-    if (box) box.scrollTop = box.scrollHeight;
-  }, [call?.transcript.length, busy]);
-
-  // Put the updated call from the backend into the list (replacing the old copy)
-  function saveCall(updated: ScreeningCall) {
-    setCalls((previous) => [...previous.filter((c) => c.id !== updated.id), updated]);
-  }
-
-  // One helper for every button: spinner, API call, error message
-  async function run(action: () => Promise<ScreeningCall>, success?: string) {
+  async function retry() {
+    if (!call) return;
     setBusy(true);
     try {
-      const updated = await action();
-      saveCall(updated);
-      if (success) toast.success(success);
-      return updated;
+      const updated = await retryScreeningReport(call.id);
+      setCalls((previous) => previous.map((c) => (c.id === updated.id ? updated : c)));
+      toast.success("Report ready.");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Something went wrong.");
-      return undefined;
+      toast.error(err instanceof Error ? err.message : "Could not write the report.");
     } finally {
       setBusy(false);
     }
-  }
-
-  async function start() {
-    const started = await run(() => startScreeningCall(candidate.id), "Screening call started.");
-    if (started) onChange(); // the candidate's status changed → reload the page data
-  }
-
-  async function send() {
-    const text = answer.trim();
-    if (!text || !call) return;
-    const updated = await run(() => replyToScreeningCall(call.id, text));
-    if (!updated) return;
-    setAnswer("");
-    if (updated.status !== "in_progress") onChange(); // the call ended → status changed
-  }
-
-  async function cancel() {
-    if (!call) return;
-    if (!window.confirm("End this call? The candidate goes back to 'shortlisted'.")) return;
-    const ended = await run(() => cancelScreeningCall(call.id), "Call ended.");
-    if (ended) onChange();
-  }
-
-  async function retry() {
-    if (!call) return;
-    await run(() => retryScreeningReport(call.id), "Report ready.");
   }
 
   // Nothing to show: no calls yet and the candidate is not shortlisted
   if (!loaded) return null;
   if (!call && candidate.status !== "shortlisted") return null;
 
-  const canStart = candidate.status === "shortlisted" && call?.status !== "in_progress";
-
   return (
     <section className="space-y-5 rounded-2xl border bg-card p-6 shadow-xs">
-      {/* ---------- Title + Start button ---------- */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="flex items-center gap-2 font-display text-lg font-bold">
-            <PhoneCall className="size-4 text-indigo-600" /> Screening call (Agent 2)
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Text mode: you type the candidate&apos;s answers to try the call. Voice calls come later.
-          </p>
-        </div>
-        {canStart && (
-          <button
-            type="button"
-            onClick={start}
-            disabled={busy}
-            className="inline-flex h-10 items-center gap-2 rounded-full bg-linear-to-r from-indigo-600 to-violet-600 px-5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 disabled:opacity-60"
-          >
-            {busy ? <Loader2 className="size-4 animate-spin" /> : <PhoneCall className="size-4" />}
-            {call ? "Start a new call" : "Start screening call"}
-          </button>
-        )}
+      <div>
+        <h2 className="flex items-center gap-2 font-display text-lg font-bold">
+          <PhoneCall className="size-4 text-indigo-600" /> Screening call (Agent 2)
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          The candidate talks to Agent 2 by voice using their private link. The transcript and report appear here.
+        </p>
       </div>
+
+      {(candidate.status === "shortlisted" || candidate.status === "screening_in_progress") && (
+        <InviteBox candidate={candidate} invite={invite} onCreated={setInvite} />
+      )}
+
+      {!call && (
+        <p className="rounded-xl bg-muted/50 p-4 text-sm text-muted-foreground">
+          Waiting for the candidate to do their voice interview.
+        </p>
+      )}
 
       {call && (
         <>
           <p className="text-xs text-muted-foreground">
-            Call #{call.id} · {callStatusLabels[call.status] ?? call.status} · started {formatDateTime(call.started_at)}
+            Call #{call.id} · {call.mode === "voice" ? "Voice" : "Text"} · {callStatusLabels[call.status] ?? call.status}{" "}
+            · started {formatDateTime(call.started_at)}
           </p>
 
-          {/* ---------- The conversation ---------- */}
-          <div ref={chatRef} className="max-h-96 space-y-3 overflow-y-auto rounded-xl border bg-muted/30 p-4">
-            {call.transcript.map((message, i) => (
-              <Bubble key={i} message={message} />
-            ))}
-            {busy && call.status === "in_progress" && (
-              <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="size-3.5 animate-spin" /> Agent is thinking…
-              </p>
-            )}
-          </div>
-
-          {/* ---------- Typing box (only while the call is running) ---------- */}
-          {call.status === "in_progress" && (
-            <div className="space-y-2">
-              <textarea
-                rows={2}
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                onKeyDown={(e) => {
-                  // Enter sends, Shift+Enter makes a new line
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-                disabled={busy}
-                placeholder="Type the candidate's answer… (Enter to send, Shift+Enter for a new line)"
-                className="w-full rounded-xl border bg-background px-3.5 py-2.5 text-sm outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-500/10"
-              />
-              <div className="flex flex-wrap justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={cancel}
-                  disabled={busy}
-                  className="inline-flex h-10 items-center gap-2 rounded-full border border-destructive/30 px-4 text-sm font-semibold text-destructive hover:bg-destructive/10 disabled:opacity-60"
-                >
-                  <PhoneOff className="size-4" /> End call
-                </button>
-                <button
-                  type="button"
-                  onClick={send}
-                  disabled={busy || !answer.trim()}
-                  className="inline-flex h-10 items-center gap-2 rounded-full bg-indigo-600 px-5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
-                >
-                  <Send className="size-4" /> Send answer
-                </button>
-              </div>
+          {call.status === "in_progress" ? (
+            <p className="flex items-center gap-2 rounded-xl bg-muted/50 p-4 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> The candidate is doing the interview now…
+            </p>
+          ) : (
+            <div className="max-h-96 space-y-3 overflow-y-auto rounded-xl border bg-muted/30 p-4">
+              {call.transcript.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No conversation was recorded.</p>
+              ) : (
+                call.transcript.map((message, i) => <Bubble key={i} message={message} />)
+              )}
             </div>
           )}
 
@@ -246,9 +174,53 @@ function Bubble({ message }: { message: ScreeningMessage }) {
   );
 }
 
-// The report GPT wrote after the call
+// The report GPT wrote after the call: the basic HR facts (notice period, salary, availability...)
 function ReportView({ call, report }: { call: ScreeningCall; report: ScreeningReport }) {
-  const recommendation = recommendationStyles[report.recommendation] ?? recommendationStyles.maybe;
+  if (!report.details) return <ScoredReportView call={call} report={report} />; // an old test call
+
+  const total = report.total_questions ?? report.details.length;
+  const answered = report.answered_count ?? total;
+  return (
+    <div className="space-y-5 border-t pt-5">
+      <h3 className="flex items-center gap-2 font-semibold">
+        <Sparkles className="size-4 text-indigo-600" /> Call report
+      </h3>
+
+      {report.summary && <p className="text-sm leading-relaxed">{report.summary}</p>}
+
+      {/* Warn HR if some details are missing */}
+      {answered < total && (
+        <p className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          {answered} of {total} details collected. Missing: {(report.missing ?? []).join(", ")}.
+        </p>
+      )}
+
+      {/* The candidate's answers, one row per detail */}
+      <dl className="divide-y rounded-xl border text-sm">
+        {report.details.map((d) => (
+          <div key={d.key} className="grid gap-1 px-4 py-2.5 sm:grid-cols-[14rem_1fr]">
+            <dt className="text-muted-foreground">{d.label}</dt>
+            <dd className={d.value ? "font-medium" : "italic text-muted-foreground"}>{d.value ?? "Not answered"}</dd>
+          </div>
+        ))}
+      </dl>
+
+      {report.concerns.length > 0 && <ListBox title="Points to check" items={report.concerns} />}
+
+      <p className="flex items-start gap-2 rounded-xl bg-muted/60 p-4 text-xs text-muted-foreground">
+        <Info className="mt-0.5 size-4 shrink-0" />
+        These details were written down by AI from the call. Please confirm important ones (like salary) with the
+        candidate. Written by {call.model_version ?? "the AI model"}.
+      </p>
+    </div>
+  );
+}
+
+// Old format (earlier test calls): a score for each answer
+function ScoredReportView({ call, report }: { call: ScreeningCall; report: ScreeningReport }) {
+  const recommendation = recommendationStyles[report.recommendation ?? "maybe"] ?? recommendationStyles.maybe;
+  const answers = report.answers ?? [];
   return (
     <div className="space-y-5 border-t pt-5">
       <div className="flex flex-wrap items-center gap-4">
@@ -265,9 +237,18 @@ function ReportView({ call, report }: { call: ScreeningCall; report: ScreeningRe
 
       {report.summary && <p className="text-sm leading-relaxed">{report.summary}</p>}
 
+      {/* Warn HR if the candidate didn't answer every question */}
+      {report.answered_count !== undefined && report.answered_count < answers.length && (
+        <p className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          Incomplete call: {report.answered_count} of {answers.length} questions answered. The score only reflects
+          the answered questions, so consider this before deciding.
+        </p>
+      )}
+
       {/* One box per question: score bar, answer, reason */}
       <div className="space-y-3">
-        {report.answers.map((a, i) => (
+        {answers.map((a, i) => (
           <div key={i} className="rounded-xl border p-4 text-sm">
             <div className="flex justify-between gap-3">
               <p className="font-medium">
@@ -291,7 +272,7 @@ function ReportView({ call, report }: { call: ScreeningCall; report: ScreeningRe
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <ListBox title="Strengths" items={report.strengths} />
+        <ListBox title="Strengths" items={report.strengths ?? []} />
         <ListBox title="Concerns" items={report.concerns} />
       </div>
 
@@ -300,6 +281,95 @@ function ReportView({ call, report }: { call: ScreeningCall; report: ScreeningRe
         This report is an AI recommendation to help HR. It is not a hiring decision. Written by{" "}
         {call.model_version ?? "the AI model"}.
       </p>
+    </div>
+  );
+}
+
+// The candidate's interview link: copy it, or make a new one
+function InviteBox({
+  candidate,
+  invite,
+  onCreated,
+}: {
+  candidate: CandidateDetail;
+  invite: ScreeningInvite | null;
+  onCreated: (invite: ScreeningInvite) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const link = invite ? `${window.location.origin}/interview/${invite.token}` : "";
+  const label = invite ? (inviteLabels[invite.status] ?? inviteLabels.cancelled) : null;
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(link);
+      toast.success("Link copied.");
+    } catch {
+      toast.error("Could not copy. Select the link and copy it by hand.");
+    }
+  }
+
+  async function makeNew() {
+    if (invite?.status === "pending" && !window.confirm("Make a new link? The current link will stop working.")) return;
+    setBusy(true);
+    try {
+      onCreated(await createInvite(candidate.id));
+      toast.success("New interview link ready.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not make a new link.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border bg-muted/30 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-2 text-sm font-semibold">
+          <Link2 className="size-4 text-indigo-600" /> Interview link
+        </p>
+        {invite && label && (
+          <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${label.className}`}>
+            {label.text}
+            {invite.status === "pending" && ` · expires ${formatDateTime(invite.expires_at)}`}
+          </span>
+        )}
+      </div>
+
+      {invite ? (
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            readOnly
+            value={link}
+            onFocus={(e) => e.target.select()}
+            className="h-10 min-w-0 flex-1 rounded-xl border bg-background px-3 text-sm text-muted-foreground"
+          />
+          <button
+            type="button"
+            onClick={copy}
+            disabled={invite.status !== "pending"}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-full border px-4 text-sm font-semibold hover:bg-muted disabled:opacity-50"
+          >
+            <Copy className="size-4" /> Copy
+          </button>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">No interview link yet.</p>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">Send this link to the candidate. Emails come with Agent 3.</p>
+        {candidate.status === "shortlisted" && (
+          <button
+            type="button"
+            onClick={makeNew}
+            disabled={busy}
+            className="inline-flex h-9 items-center gap-2 rounded-full bg-indigo-600 px-4 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+            {invite ? "New link" : "Create link"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

@@ -381,15 +381,16 @@ def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
 
 # ---------- HR decisions: the human approval gate ----------
 
-def record_decision(candidate: Candidate, new_status: str, reason: str | None, user: User, db: Session):
-    """Save one history row (who, what, why, when), then change the candidate's status."""
+def record_decision(candidate: Candidate, new_status: str, reason: str | None, user: User | None, db: Session):
+    """Save one history row (who, what, why, when), then change the candidate's status.
+    user is None when the change was made by the candidate's own interview (no HR click)."""
     db.add(CandidateDecision(
         candidate_id=candidate.id,
         job_id=candidate.job_id,
         from_status=candidate.status,
         to_status=new_status,
         reason=reason,
-        decided_by=user.id,
+        decided_by=user.id if user else None,
     ))
     candidate.status = new_status
 

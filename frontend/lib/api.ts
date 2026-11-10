@@ -108,18 +108,32 @@ export type ScreeningMessage = {
 // The AI's marks for one screening question
 export type ScreeningAnswer = {
   question: string;
+  answered?: boolean; // false = the candidate didn't answer this question
   answer_summary: string;
   score: number; // 0-10
   comment: string;
 };
 
+// One fact from the HR screening call, e.g. { label: "Notice period", value: "1 month" }
+export type ScreeningDetail = {
+  key: string;
+  label: string;
+  value: string | null; // null = not answered
+};
+
 // The report GPT writes after the call
 export type ScreeningReport = {
-  answers: ScreeningAnswer[];
-  strengths: string[];
-  concerns: string[];
   summary: string;
-  recommendation: "proceed" | "maybe" | "not_recommended";
+  concerns: string[];
+  answered_count?: number; // how many questions were really answered
+  // New format: the basic HR facts (notice period, salary, availability...)
+  details?: ScreeningDetail[];
+  missing?: string[];
+  total_questions?: number;
+  // Old format (earlier test calls with scored answers)
+  answers?: ScreeningAnswer[];
+  strengths?: string[];
+  recommendation?: string;
 };
 
 export type ScreeningCall = {
@@ -136,6 +150,36 @@ export type ScreeningCall = {
   model_version: string | null;
   started_at: string;
   ended_at: string | null;
+};
+
+// A candidate's interview link, as HR sees it
+export type ScreeningInvite = {
+  id: number;
+  token: string;
+  status: string; // pending / used / cancelled / expired
+  expires_at: string;
+  created_at: string;
+  used_at: string | null;
+};
+
+// ---------- Candidate interview page (public, no login) ----------
+
+export type InterviewInfo = {
+  candidate_name: string;
+  job_title: string;
+  question_count: number;
+  status: string; // pending / used / cancelled / expired
+  expires_at: string;
+};
+
+export type InterviewStart = {
+  screening_call_id: number;
+  assistant: Record<string, unknown>; // the voice agent's settings, passed to Vapi
+};
+
+export type InterviewFinish = {
+  status: string; // completed / cancelled / processing
+  message: string;
 };
 
 // What HR fills in for Agent 0 (the AI job description writer)
@@ -324,11 +368,19 @@ export function uploadResumes(jobId: number, files: File[]) {
 // Screening calls (Agent 2)
 export const getScreeningCalls = (candidateId: number) =>
   apiFetch<ScreeningCall[]>(`/api/candidates/${candidateId}/screening-calls`);
-export const startScreeningCall = (candidateId: number) =>
-  apiFetch<ScreeningCall>(`/api/candidates/${candidateId}/screening-calls`, { method: "POST" });
-export const replyToScreeningCall = (callId: number, text: string) =>
-  apiFetch<ScreeningCall>(`/api/screening-calls/${callId}/reply`, jsonBody("POST", { text }));
-export const cancelScreeningCall = (callId: number) =>
-  apiFetch<ScreeningCall>(`/api/screening-calls/${callId}/cancel`, { method: "POST" });
 export const retryScreeningReport = (callId: number) =>
   apiFetch<ScreeningCall>(`/api/screening-calls/${callId}/report`, { method: "POST" });
+export const getInvite = (candidateId: number) =>
+  apiFetch<ScreeningInvite | null>(`/api/candidates/${candidateId}/invite`);
+export const createInvite = (candidateId: number) =>
+  apiFetch<ScreeningInvite>(`/api/candidates/${candidateId}/invite`, { method: "POST" });
+
+// Candidate interview (public: the token in the link is the permission)
+const interviewPath = (token: string) => `/api/interview/${encodeURIComponent(token)}`;
+export const getInterviewInfo = (token: string) => apiFetch<InterviewInfo>(interviewPath(token));
+export const startInterview = (token: string) =>
+  apiFetch<InterviewStart>(`${interviewPath(token)}/start`, { method: "POST" });
+export const interviewConnected = (token: string, vapiCallId: string) =>
+  apiFetch<void>(`${interviewPath(token)}/connected`, jsonBody("POST", { vapi_call_id: vapiCallId }));
+export const finishInterview = (token: string) =>
+  apiFetch<InterviewFinish>(`${interviewPath(token)}/finish`, { method: "POST" });

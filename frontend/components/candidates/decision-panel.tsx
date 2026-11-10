@@ -163,7 +163,7 @@ export function DecisionPanel({
                     )}
                     <span className="text-muted-foreground">
                       {" "}
-                      · by {d.decided_by_name ?? "unknown"} · {formatDateTime(d.created_at)}
+                      · by {d.decided_by_name ?? "the system"} · {formatDateTime(d.created_at)}
                     </span>
                   </p>
                   {d.reason && <p className="text-muted-foreground">&ldquo;{d.reason}&rdquo;</p>}

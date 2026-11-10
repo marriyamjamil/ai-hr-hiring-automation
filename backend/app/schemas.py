@@ -265,11 +265,6 @@ class ScreeningMessage(BaseModel):
     text: str
 
 
-# What the candidate types as an answer
-class ScreeningReplyIn(BaseModel):
-    text: str = Field(min_length=1, max_length=2000, examples=["About 3 years, mostly Django and FastAPI."])
-
-
 # A screening call as the API shows it
 class ScreeningCallOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -287,3 +282,41 @@ class ScreeningCallOut(BaseModel):
     model_version: str | None
     started_at: datetime
     ended_at: datetime | None
+
+
+# ---------- Candidate interview page (Agent 2, Stage 2.2: no login, the token is the key) ----------
+
+# What the candidate's page shows before the call (no scores, no private data)
+class InterviewInfo(BaseModel):
+    candidate_name: str
+    job_title: str
+    question_count: int
+    status: str  # pending / used / cancelled / expired
+    expires_at: datetime
+
+
+# Sent back when the candidate presses "Start": the voice agent's settings for Vapi
+class InterviewStartOut(BaseModel):
+    screening_call_id: int
+    assistant: dict
+
+
+# The browser tells us Vapi's id for this call (letters, digits and dashes only)
+class InterviewConnectedIn(BaseModel):
+    vapi_call_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9-]+$")
+
+
+# What the candidate sees after the call (never the report: that is for HR only)
+class InterviewFinishOut(BaseModel):
+    status: str  # completed / cancelled / processing
+    message: str
+
+
+# A candidate's interview link, as HR sees it
+class InviteOut(BaseModel):
+    id: int
+    token: str
+    status: str  # pending / used / cancelled / expired
+    expires_at: datetime
+    created_at: datetime
+    used_at: datetime | None

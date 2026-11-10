@@ -116,10 +116,7 @@ export function CandidateDetails() {
       <DecisionPanel candidate={candidate} onChange={setCandidate} />
 
       {/* ---------- Agent 2: screening call + report ---------- */}
-      <ScreeningPanel
-        candidate={candidate}
-        onChange={() => getCandidate(candidateId).then(setCandidate).catch(() => {})}
-      />
+      <ScreeningPanel candidate={candidate} />
 
       {/* ---------- Not scored: explain why ---------- */}
       {!evaluation && (
