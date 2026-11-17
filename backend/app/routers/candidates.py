@@ -12,7 +12,7 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.booking_links import cancel_open_links
-from app.emails import send_cancellation
+from app.emails import send_cancellation, send_screening_invite
 from app.invites import cancel_open_invites, create_invite
 from app.models import (
     Candidate,
@@ -457,7 +457,8 @@ def approve_shortlist(
         else:
             reason = "Approved by HR after a manual CV review"
         record_decision(candidate, "shortlisted", reason, current_user, db)
-        create_invite(candidate, current_user, db)  # 🔗 their private screening link (Agent 2)
+        invite = create_invite(candidate, current_user, db)  # 🔗 their private screening link (Agent 2)
+        send_screening_invite(candidate, invite, db)  # 📧 emailed to the candidate automatically
         shortlisted += 1
 
     db.commit()
@@ -521,7 +522,8 @@ def decide_candidate(
     # Shortlisted → a private screening link is made automatically (Agent 2).
     # Any other status → old links stop working.
     if new_status == "shortlisted":
-        create_invite(candidate, current_user, db)
+        invite = create_invite(candidate, current_user, db)
+        send_screening_invite(candidate, invite, db)  # 📧 the new link is emailed to the candidate
     else:
         cancel_open_invites(candidate, db)
     # Not invited any more (rejected or undone) → free any interview slot held for them (Agent 3)

@@ -1,10 +1,20 @@
+from pathlib import Path
+
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
 
 # check_same_thread=False is needed only for SQLite when used with FastAPI
 connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+
+# SQLite can't create folders: make sure the database's folder exists
+# (on Azure the database lives in /home/data, which survives restarts)
+if settings.database_url.startswith("sqlite"):
+    db_file = make_url(settings.database_url).database
+    if db_file and db_file != ":memory:":
+        Path(db_file).parent.mkdir(parents=True, exist_ok=True)
 
 # The engine is the connection to the database (address comes from .env)
 engine = create_engine(settings.database_url, connect_args=connect_args)

@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.agents.scheduling_agent import PAKISTAN_TIME
 from app.config import settings
 from app.invites import as_utc
-from app.models import Candidate, EmailOutbox, Interview, utc_now
+from app.models import Candidate, EmailOutbox, Interview, ScreeningInvite, utc_now
 
 
 # ---------- Small helpers ----------
@@ -172,6 +172,46 @@ def make_ics(
 
 
 # ---------- The emails ----------
+
+def send_screening_invite(candidate: Candidate, invite: ScreeningInvite, db: Session) -> None:
+    """Agent 2: HR shortlisted the candidate → email them their private screening call link."""
+    company = settings.company_name
+    job_title = candidate.job.title
+    link = f"{settings.frontend_origin}/interview/{invite.token}"
+    expires = as_utc(invite.expires_at).astimezone(PAKISTAN_TIME)
+
+    body = f"""Dear {first_name(candidate.name)},
+
+Thank you for applying for the {job_title} position at {company}. We have reviewed your application and are pleased to invite you to the next step of our hiring process: a short screening call.
+
+Screening call details
+Position: {job_title}
+Format: Online voice call with our AI recruiting assistant
+Duration: About 10 to 15 minutes
+Link valid until: {expires:%A}, {expires.day} {expires:%B %Y}
+
+→ Start your screening call: {link}
+
+You can take the call at any time that suits you before the link expires. Before you begin, please:
+- Use Google Chrome or Microsoft Edge on a laptop or phone
+- Find a quiet place with a stable internet connection
+- Allow microphone access when your browser asks
+
+The call is recorded and transcribed so that our HR team can review your answers. This link is personal to you, so please do not share it.
+
+If you have any questions or need help, simply reply to this email.
+
+We look forward to hearing from you.
+
+{signature()}
+"""
+    queue_email(
+        db, candidate.email, candidate.name,
+        f"Next Step: Screening Call – {job_title} | {company}",
+        body,
+        candidate_id=candidate.id,
+    )
+
 
 def send_interview_invites(
     interview: Interview,
