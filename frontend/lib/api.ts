@@ -1,5 +1,12 @@
-// The backend address, read from .env.local
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+// The backend address, read from .env.local (or the GitHub variable when built for Azure).
+// Made safe: "https://" is added if it was forgotten, and a "/" at the end is removed.
+function cleanApiUrl(value: string | undefined): string {
+  const url = (value ?? "").trim().replace(/\/+$/, "");
+  if (!url) return "http://127.0.0.1:8000";
+  return /^https?:\/\//.test(url) ? url : `https://${url}`;
+}
+
+export const API_URL = cleanApiUrl(process.env.NEXT_PUBLIC_API_URL);
 
 const TOKEN_KEY = "hireai_token";
 
