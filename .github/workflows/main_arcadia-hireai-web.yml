@@ -77,4 +77,7 @@ jobs:
           app-name: 'arcadia-hireai-web'
           slot-name: 'Production'
           package: .
+          type: zip       # deploy as one package (needed for clean + restart below)
+          clean: true     # delete the OLD website files first, so no old pages or chunks are left behind
+          restart: true   # restart the website, so the new version is really running
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_18ADDA14F52D43F68563D44D27D32E4A }}
